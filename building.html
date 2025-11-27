@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Airport Building Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <style>
+    html,body,#map{height:100%;margin:0;padding:0;}
+    #controls {
+      position:absolute;top:10px;left:10px;z-index:1000;
+      background:white;padding:8px 12px;border-radius:6px;
+      box-shadow:0 0 4px rgba(0,0,0,0.3);font-size:14px;
+    }
+    .colorBox{display:inline-block;width:12px;height:12px;margin-right:4px;vertical-align:middle;}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="controls">
+  <div><b>Choose contours:</b></div>
+  <label><input type="checkbox" value="0.5"> 500 m</label><br>
+  <label><input type="checkbox" value="1"> 1000 m</label><br>
+  <label><input type="checkbox" value="2"> 2000 m</label>
+</div>
+
+<script>
+// --- Base layers ---
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+});
+const satellite = L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+  subdomains:['mt0','mt1','mt2','mt3'],
+  attribution: '&copy; Google Satellite'
+});
+
+// --- Initialize map with default base layer ---
+const map = L.map('map', {
+  center: [23.072,72.635],
+  layers: [osm] // default
+});
+
+// --- Layer toggle control ---
+const baseMaps = {
+  "OpenStreetMap": osm,
+  "Satellite": satellite
+};
+
+// --- Create a pane for capsules below buildings ---
+map.createPane('capsulePane');
+map.getPane('capsulePane').style.zIndex = 200; 
+map.getPane('capsulePane').style.pointerEvents = 'none'; 
+
+// --- Base coordinates ---
+const centerA = [72.6249, 23.0669];
+const centerB = [72.6465, 23.0885];
+
+// --- Store active capsule layers and building layer ---
+const capsuleLayers = {};
+let buildingLayer;
+let buildingsData = [];
+
+// --- Placeholder for building layer control ---
+let overlayMaps = {};
+
+// --- Function to make capsule polygon for given radius (km) ---
+function makeCapsule(radiusKm){
+  const circleA = turf.circle(centerA, radiusKm, {steps:64, units:'kilometers'});
+  const circleB = turf.circle(centerB, radiusKm, {steps:64, units:'kilometers'});
+  const bearingAB = turf.bearing(turf.point(centerA), turf.point(centerB));
+  const bearingLeft = bearingAB + 90;
+  const bearingRight = bearingAB - 90;
+  const leftA = turf.destination(centerA, radiusKm, bearingLeft, {units:'kilometers'}).geometry.coordinates;
+  const rightA = turf.destination(centerA, radiusKm, bearingRight, {units:'kilometers'}).geometry.coordinates;
+  const leftB = turf.destination(centerB, radiusKm, bearingLeft, {units:'kilometers'}).geometry.coordinates;
+  const rightB = turf.destination(centerB, radiusKm, bearingRight, {units:'kilometers'}).geometry.coordinates;
+  const capsuleBody = turf.polygon([[leftA, leftB, rightB, rightA, leftA]]);
+  const merged = turf.dissolve(turf.featureCollection([circleA, circleB, capsuleBody]));
+  return merged.features[0];
+}
+
+// --- Fetch buildings and prepare global variable ---
+fetch('Building_final1.geojson')
+  .then(r => r.json())
+  .then(data => {
+    data.features.forEach(f => {
+      f.properties._center = turf.centerOfMass(f).geometry.coordinates;
+      f.properties._bbox = turf.bbox(f);
+    });
+    buildingsData = data.features;
+
+    buildingLayer = L.geoJSON(data,{
+      style:()=>({color:'blue',weight:1,fillOpacity:0.6}),
+      onEachFeature:(f,l)=>{
+        const h = f.properties.mean_height_m ?? 'N/A';
+        l.bindPopup(`<b>Mean Height:</b> ${h} m`);
+        l.on('click', ()=> l.openPopup());
+      },
+      preferCanvas: true
+    }).addTo(map);
+
+    // --- Add building layer to overlay maps for toggle ---
+    overlayMaps["Buildings"] = buildingLayer;
+
+    // Add Layer control after building layer is ready
+    L.control.layers(baseMaps, overlayMaps).addTo(map);
+
+    map.fitBounds(buildingLayer.getBounds());
+  })
+  .catch(err=>console.error("Error loading GeoJSON:",err));
+
+// --- Toggle capsules ---
+document.querySelectorAll('#controls input[type=checkbox]').forEach(cb=>{
+  cb.addEventListener('change',()=>{
+    const val=parseFloat(cb.value);
+    if(cb.checked){
+      const capsule=makeCapsule(val);
+      const layer=L.geoJSON(capsule,{
+        style:{color:'green',weight:2,fillOpacity:0.1},
+        pane:'capsulePane'
+      }).addTo(map);
+      capsuleLayers[val]=layer;
+    } else {
+      if(capsuleLayers[val]) { map.removeLayer(capsuleLayers[val]); delete capsuleLayers[val]; }
+    }
+    updateBuildingColors();
+  });
+});
+
+// --- Update building colors ---
+function updateBuildingColors(){
+  if(!buildingLayer) return;
+
+  const activeRadii = Object.keys(capsuleLayers).map(Number);
+  const thresholds = {0.5:5,1:7.5,2:10};
+
+  buildingLayer.eachLayer(layer=>{
+    const props = layer.feature.properties;
+    const h = props.mean_height_m || 0;
+    const center = props._center;
+
+    let isRed = false;
+    for(const r of activeRadii){
+      const capsule = capsuleLayers[r].toGeoJSON();
+      const [minX,minY,maxX,maxY] = turf.bbox(capsule);
+      if(center[0]<minX || center[0]>maxX || center[1]<minY || center[1]>maxY) continue;
+
+      const capsulePoly = capsule.features ? capsule.features[0] : capsule;
+      if(turf.booleanPointInPolygon(center, capsulePoly)){
+        if(h > thresholds[r]) { isRed = true; break; }
+      }
+    }
+
+    const color = isRed ? 'red' : 'blue';
+    layer.setStyle({color,weight:1,fillOpacity:0.6});
+  });
+}
+</script>
+</body>
+</html>

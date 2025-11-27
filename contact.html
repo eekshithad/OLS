@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GeoKno – Contact Us</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f4f4f4;
+    }
+
+    .container {
+        display: flex;
+        height: 100vh;
+    }
+
+    /* Left side with logo */
+    .left {
+        flex: 1;
+        background: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-right: 2px solid #ddd;
+        padding: 20px;
+    }
+
+    .left img {
+        max-width: 70%;
+        height: auto;
+    }
+
+    /* Right side form */
+    .right {
+        flex: 1.2;
+        padding: 40px 50px;
+        background: #ffffff;
+    }
+
+    h2 {
+        margin-top: 0;
+        font-size: 28px;
+        margin-bottom: 25px;
+    }
+
+    label {
+        font-size: 15px;
+    }
+
+    input {
+        width: 100%;
+        padding: 12px;
+        margin: 10px 0 20px 0;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-size: 16px;
+    }
+
+    button {
+        background: #0078ff;
+        color: white;
+        padding: 12px 20px;
+        border: none;
+        border-radius: 5px;
+        font-size: 17px;
+        cursor: pointer;
+        width: 100%;
+        margin-top: 10px;
+    }
+
+    button:hover {
+        background: #005fcc;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+        .container {
+            flex-direction: column;
+            height: auto;
+        }
+        .left {
+            border-right: none;
+            border-bottom: 2px solid #ddd;
+        }
+    }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- LEFT SIDE LOGO -->
+    <div class="left">
+        <img src="GeoknoLOGO_small.jpg" alt="Geokno Logo">
+    </div>
+
+    <!-- RIGHT SIDE CONTACT FORM -->
+    <div class="right">
+        <h2>Contact Us</h2>
+
+        <form id="contactForm">
+
+            <label>Name:</label>
+            <input type="text" id="name" required>
+
+            <label>Contact Number:</label>
+            <input type="tel" id="contact" required>
+
+            <label>Email ID:</label>
+            <input type="email" id="email" required>
+
+            <label>Designation:</label>
+            <input type="text" id="designation">
+
+            <label>Company:</label>
+            <input type="text" id="company">
+
+            <button type="button" onclick="submitForm()">Submit</button>
+
+        </form>
+    </div>
+
+</div>
+
+<script>
+function submitForm() {
+    // Clear all fields
+    document.getElementById("contactForm").reset();
+
+    alert("Thank you! Your details have been submitted.");
+}
+</script>
+
+</body>
+</html>

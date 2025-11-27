@@ -1,0 +1,271 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MapLibre 3D — Runway + Takeoff/Approach + Transitional Cone</title>
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    body,html,#map { height:100%; margin:0; padding:0; }
+    .controls { position: absolute; z-index: 2; top: 10px; left: 10px; background: rgba(255,255,255,0.95); padding:10px; border-radius:6px; font-family: Arial; }
+    .legend { font-size:12px; margin-top:6px }
+    .small { font-size:12px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="controls">
+    <div class="small"><strong>Zones toggle</strong></div>
+    <label><input type="checkbox" id="toggle-pqrs" checked /> Runway PQRS</label><br/>
+    <label><input type="checkbox" id="toggle-takeoff" checked /> Takeoff (sliced)</label><br/>
+    <label><input type="checkbox" id="toggle-approach" checked /> Approach (sliced)</label><br/>
+    <label><input type="checkbox" id="toggle-trans" checked /> Transitional (curtain)</label><br/>
+    <label><input type="checkbox" id="toggle-inner" checked /> Inner horizontal (4km)</label>
+    <div class="legend">Strip width = 120 m (confirmed). Inner horizontal radius = 4000 m. Transitional slope = 1:7 (capped 45 m).</div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <script>
+  // ---------- USER INPUT COORDINATES (lon,lat) ----------
+  const A = [77.08500, 28.56760];
+  const B = [77.12270, 28.55880];
+  const C = [77.12260, 28.55800];
+  const D = [77.08490, 28.56680];
+
+  // ---------- PARAMETERS ----------
+  const stripFullWidth = 120;      // user confirmed (meters), full width
+  const stripHalf = stripFullWidth / 2; // 60m half-width used earlier
+  const innerRadiusMeters = 4000;  // inner horizontal radius
+  const innerHeight = 45;          // inner horizontal surface height (m)
+  const transSlope = 1/7;          // vertical / horizontal = 1/7
+  const transitionalSamples = 180; // number of radial bands (higher = smoother)
+  const coneSliceCount = 40;       // slices for approach/takeoff extrusion
+  const takeoffAngleDeg = 15;      // ±angle for wedge
+  const takeoffLength = 2400;      // meters
+
+  // ---------- UTILS ----------
+  function ensureCoord(c,label='coord'){ if(!Array.isArray(c)||c.length<2) throw new Error(label+' invalid: '+JSON.stringify(c)); const lon=Number(c[0]), lat=Number(c[1]); if(!isFinite(lon)||!isFinite(lat)) throw new Error(label+' not numbers'); return [lon,lat]; }
+  function metersToKm(m){ return m/1000; }
+
+  // ---------- Turf helpers ----------
+  const runwayPoly = turf.polygon([[ ensureCoord(A,'A'), ensureCoord(B,'B'), ensureCoord(C,'C'), ensureCoord(D,'D'), ensureCoord(A,'A') ]]);
+  const runwayCentroid = turf.centroid(runwayPoly).geometry.coordinates;
+
+  // Create PQRS (offsets: AB,CD -> 145, AD,BC -> 60) - reuse robust logic
+  function offsetLineTowardsInterior(line, distanceMeters){
+    const left = turf.lineOffset(line, metersToKm(distanceMeters), {units:'kilometers'});
+    const right = turf.lineOffset(line, -metersToKm(distanceMeters), {units:'kilometers'});
+    const midOf = (feat) => turf.midpoint(turf.point(feat.geometry.coordinates[0]), turf.point(feat.geometry.coordinates[feat.geometry.coordinates.length-1])).geometry.coordinates;
+    const leftMid = midOf(left), rightMid = midOf(right);
+    const dL = turf.distance(turf.point(leftMid), turf.point(runwayCentroid), {units:'kilometers'});
+    const dR = turf.distance(turf.point(rightMid), turf.point(runwayCentroid), {units:'kilometers'});
+    return (dL < dR) ? left : right;
+  }
+  const lineAB = turf.lineString([A,B]), lineBC = turf.lineString([B,C]), lineCD = turf.lineString([C,D]), lineDA = turf.lineString([D,A]);
+  const offsetAB = offsetLineTowardsInterior(lineAB, 145);
+  const offsetCD = offsetLineTowardsInterior(lineCD, 145);
+  const offsetAD = offsetLineTowardsInterior(lineDA, 60);
+  const offsetBC = offsetLineTowardsInterior(lineBC, 60);
+
+  function intersectLinesSafe(l1,l2,label='x'){
+    const pts = turf.lineIntersect(l1,l2);
+    if(pts.features && pts.features.length>0) return pts.features[0].geometry.coordinates;
+    // fallback: nearest point on l2 to endpoint of l1
+    const end = l1.geometry.coordinates[l1.geometry.coordinates.length-1];
+    const nearest = turf.nearestPointOnLine(l2, turf.point(end));
+    if(nearest && nearest.geometry) return nearest.geometry.coordinates;
+    return end;
+  }
+  const P = intersectLinesSafe(offsetAB, offsetAD, 'P');
+  const Q = intersectLinesSafe(offsetAB, offsetBC, 'Q');
+  const R = intersectLinesSafe(offsetCD, offsetBC, 'R');
+  const S = intersectLinesSafe(offsetCD, offsetAD, 'S');
+  const PQRS = [ensureCoord(P,'P'), ensureCoord(Q,'Q'), ensureCoord(R,'R'), ensureCoord(S,'S'), ensureCoord(P,'P')];
+  const pqrsPoly = turf.polygon([PQRS]);
+
+  // ---------- Inner horizontal circle (around centroid) ----------
+  const innerCircle = turf.circle(runwayCentroid, metersToKm(innerRadiusMeters), {steps: 256, units: 'kilometers'});
+  // get inner ring coordinates (lon,lat) array
+  const innerRing = innerCircle.geometry.coordinates[0];
+
+  // ---------- Build transitional bands (radial between PQRS boundary and inner circle) ----------
+  // We'll sample points along PQRS boundary (closed polyline) evenly by segment length
+  function ringSamplePoints(ringCoords, sampleCount){
+    const line = turf.lineString(ringCoords);
+    const lenKm = turf.length(line, {units:'kilometers'});
+    const pts = [];
+    for(let i=0;i<sampleCount;i++){
+      const fraction = i / sampleCount;
+      const seg = turf.along(line, lenKm * fraction, {units:'kilometers'});
+      pts.push(seg.geometry.coordinates);
+    }
+    return pts;
+  }
+
+  // sample PQRS (closed) and inner circle with same number of samples by bearing from centroid
+  const pqrsSamples = ringSamplePoints(PQRS, transitionalSamples);
+
+  // For each PQRS sample, find intersection point on innerCircle along ray from centroid->sample
+  function intersectRayWithInner(center, samplePoint){
+    // sample many points along ray from samplePoint outward toward center->sample direction reversed? 
+    // We want point on innerCircle along direction from center -> sample (so from center outward at same bearing as center->sample)
+    const bear = turf.bearing(turf.point(center), turf.point(samplePoint));
+    // create line from center out to a distance slightly larger than innerRadius (ensure crossing)
+    const outer = turf.destination(turf.point(center), metersToKm(innerRadiusMeters*1.2), bear, {units:'kilometers'}).geometry.coordinates;
+    const ray = turf.lineString([center, outer]);
+    const intersects = turf.lineIntersect(ray, innerCircle);
+    if(intersects.features && intersects.features.length>0) return intersects.features[0].geometry.coordinates;
+    // fallback: take point on innerCircle at same bearing
+    const fallback = turf.destination(turf.point(center), metersToKm(innerRadiusMeters), bear, {units:'kilometers'}).geometry.coordinates;
+    return fallback;
+  }
+
+  // For each sample produce a quad [pqrs_i, pqrs_{i+1}, inner_{i+1}, inner_i]
+  const transBands = [];
+  for(let i=0;i<pqrsSamples.length;i++){
+    const p0 = pqrsSamples[i];
+    const p1 = pqrsSamples[(i+1)%pqrsSamples.length];
+    // compute inner points for p0 and p1
+    const in0 = intersectRayWithInner(runwayCentroid, p0);
+    const in1 = intersectRayWithInner(runwayCentroid, p1);
+    // compute horizontal distance from PQRS sample to inner intersection (meters)
+    const d0 = turf.distance(turf.point(p0), turf.point(in0), {units:'kilometers'}) * 1000;
+    const d1 = turf.distance(turf.point(p1), turf.point(in1), {units:'kilometers'}) * 1000;
+    // Heights based on slope 1:7 (vertical = horizontal / 7), capped at innerHeight
+    const h0 = Math.min(d0 * transSlope, innerHeight);
+    const h1 = Math.min(d1 * transSlope, innerHeight);
+    // build polygon quad (lon,lat order)
+    const poly = [ ensureCoord(p0,'tp0'), ensureCoord(p1,'tp1'), ensureCoord(in1,'ti1'), ensureCoord(in0,'ti0'), ensureCoord(p0,'tp0') ];
+    transBands.push({
+      type: 'Feature',
+      geometry: { type: 'Polygon', coordinates: [poly] },
+      properties: { _base: 0, _height: Math.max(h0,h1), _h0: h0, _h1: h1 }
+    });
+  }
+
+  // ---------- Create takeoff and approach sectors (sliced extrusion) ----------
+  function createSector(start, end, angleDegEachSide, lengthMeters){
+    const centerBear = turf.bearing(turf.point(start), turf.point(end));
+    const mid = turf.midpoint(turf.point(start), turf.point(end)).geometry.coordinates;
+    const left = turf.destination(turf.point(mid), metersToKm(lengthMeters), centerBear + angleDegEachSide, {units:'kilometers'}).geometry.coordinates;
+    const right = turf.destination(turf.point(mid), metersToKm(lengthMeters), centerBear - angleDegEachSide, {units:'kilometers'}).geometry.coordinates;
+    return turf.polygon([[start, left, right, end, start]]);
+  }
+  const takeoffSector = createSector(Q, R, takeoffAngleDeg, takeoffLength);
+  const approachSector = createSector(S, P, takeoffAngleDeg, takeoffLength); // S->P to point toward runway
+
+  // Slice each sector along its centerline into bands with height increasing (1:7 slope)
+  function sliceSectorAlongCenter(segStart, segEnd, angleDegEachSide, totalLengthM, sliceCount, color){
+    const centerBear = turf.bearing(turf.point(segStart), turf.point(segEnd));
+    const startCenter = turf.midpoint(turf.point(segStart), turf.point(segEnd)).geometry.coordinates;
+    const extended = turf.lineString([startCenter, turf.destination(turf.point(startCenter), metersToKm(totalLengthM), centerBear, {units:'kilometers'}).geometry.coordinates]);
+    const step = totalLengthM / sliceCount;
+    const feats = [];
+    for(let i=0;i<sliceCount;i++){
+      const d0 = i*step;
+      const d1 = (i+1)*step;
+      const seg = turf.lineSliceAlong(extended, d0/1000, d1/1000, {units:'kilometers'});
+      if(!seg || !seg.geometry || seg.geometry.coordinates.length<2) continue;
+      const from = seg.geometry.coordinates[0], to = seg.geometry.coordinates[seg.geometry.coordinates.length-1];
+      const perp = centerBear + 90;
+      // widths approx increase with distance (using small base width)
+      const half0 = 50 + d0 * Math.tan((angleDegEachSide * Math.PI/180));
+      const half1 = 50 + d1 * Math.tan((angleDegEachSide * Math.PI/180));
+      const left0 = turf.destination(turf.point(from), metersToKm(half0), perp + 180, {units:'kilometers'}).geometry.coordinates;
+      const right0 = turf.destination(turf.point(from), metersToKm(half0), perp, {units:'kilometers'}).geometry.coordinates;
+      const left1 = turf.destination(turf.point(to), metersToKm(half1), perp + 180, {units:'kilometers'}).geometry.coordinates;
+      const right1 = turf.destination(turf.point(to), metersToKm(half1), perp, {units:'kilometers'}).geometry.coordinates;
+      const horiz = (d0 + d1) / 2;
+      const height = Math.min(horiz * transSlope, innerHeight); // same slope but cap
+      const poly = [ ensureCoord(left0,'l0'), ensureCoord(right0,'r0'), ensureCoord(right1,'r1'), ensureCoord(left1,'l1'), ensureCoord(left0,'l0') ];
+      feats.push({ type:'Feature', geometry: { type:'Polygon', coordinates: [poly] }, properties: { _base: 0, _height: height, _color: color } });
+    }
+    return feats;
+  }
+  const takeoffSlices = sliceSectorAlongCenter(Q, R, takeoffAngleDeg, takeoffLength, coneSliceCount, '#ff8c00');
+  const approachSlices = sliceSectorAlongCenter(S, P, takeoffAngleDeg, takeoffLength, coneSliceCount, '#0066ff');
+
+  // ---------- MapLibre setup ----------
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {},
+      layers: [{ id:'bg', type:'background', paint:{'background-color':'#eef3ff'} }]
+    },
+    center: runwayCentroid,
+    zoom: 14.4,
+    pitch: 60,
+    antialias: true
+  });
+
+  map.on('load', ()=> {
+    // basemap - OSM raster
+    map.addSource('osm-tiles', { type:'raster', tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize:256 });
+    map.addLayer({ id:'osm', type:'raster', source:'osm-tiles' }, 'bg');
+
+    // PQRS runway extruded area
+    map.addSource('pqrs', { type:'geojson', data: pqrsPoly });
+    map.addLayer({ id:'pqrs-fill', type:'fill', source:'pqrs', paint:{'fill-color':'#000','fill-opacity':0.95} });
+    map.addLayer({ id:'pqrs-line', type:'line', source:'pqrs', paint:{'line-color':'yellow','line-width':2} });
+
+    // inner horizontal circle outline & fill
+    map.addSource('inner', { type:'geojson', data: innerCircle });
+    map.addLayer({ id:'inner-fill', type:'fill', source:'inner', paint:{'fill-color':'#cccccc','fill-opacity':0.12} });
+    map.addLayer({ id:'inner-line', type:'line', source:'inner', paint:{'line-color':'#666666','line-width':1} });
+
+    // takeoff & approach slices as featurecollections
+    map.addSource('takeoff-slices', { type:'geojson', data: { type:'FeatureCollection', features: takeoffSlices }});
+    map.addLayer({ id:'takeoff-3d', type:'fill-extrusion', source:'takeoff-slices', paint:{
+      'fill-extrusion-height': ['get','_height'], 'fill-extrusion-base': ['get','_base'], 'fill-extrusion-color': ['get','_color'], 'fill-extrusion-opacity':0.75 }});
+    map.addSource('approach-slices', { type:'geojson', data: { type:'FeatureCollection', features: approachSlices }});
+    map.addLayer({ id:'approach-3d', type:'fill-extrusion', source:'approach-slices', paint:{
+      'fill-extrusion-height': ['get','_height'], 'fill-extrusion-base': ['get','_base'], 'fill-extrusion-color': ['get','_color'], 'fill-extrusion-opacity':0.75 }});
+
+    // transitional bands (featurecollection)
+    map.addSource('trans-bands', { type:'geojson', data: { type:'FeatureCollection', features: transBands } });
+    map.addLayer({ id:'trans-3d', type:'fill-extrusion', source:'trans-bands', paint:{
+      'fill-extrusion-height': ['get','_height'], 'fill-extrusion-base': ['get','_base'], 'fill-extrusion-color': '#33cc33', 'fill-extrusion-opacity':0.55 }});
+
+    // extra: draw sectors outlines for clarity
+    map.addSource('takeoff-sector', { type:'geojson', data: takeoffSector });
+    map.addLayer({ id:'takeoff-line', type:'line', source:'takeoff-sector', paint:{'line-color':'#ff8c00','line-width':1.6} });
+    map.addSource('approach-sector', { type:'geojson', data: approachSector });
+    map.addLayer({ id:'approach-line', type:'line', source:'approach-sector', paint:{'line-color':'#0066ff','line-width':1.6} });
+
+    // fit view
+    const bbox = turf.bbox(turf.featureCollection([pqrsPoly, innerCircle, takeoffSector, approachSector]));
+    map.fitBounds([[bbox[0],bbox[1]],[bbox[2],bbox[3]]], {padding: 60});
+  });
+
+  // ---------- toggles ----------
+  document.getElementById('toggle-pqrs').addEventListener('change', (e)=> {
+    const v = e.target.checked ? 'visible' : 'none';
+    if (map.getLayer('pqrs-fill')) map.setLayoutProperty('pqrs-fill','visibility',v);
+    if (map.getLayer('pqrs-line')) map.setLayoutProperty('pqrs-line','visibility',v);
+  });
+  document.getElementById('toggle-inner').addEventListener('change', (e)=> {
+    const v = e.target.checked ? 'visible' : 'none';
+    if (map.getLayer('inner-fill')) map.setLayoutProperty('inner-fill','visibility',v);
+    if (map.getLayer('inner-line')) map.setLayoutProperty('inner-line','visibility',v);
+  });
+  document.getElementById('toggle-takeoff').addEventListener('change', (e)=> {
+    const v = e.target.checked ? 'visible' : 'none';
+    if (map.getLayer('takeoff-3d')) map.setLayoutProperty('takeoff-3d','visibility',v);
+    if (map.getLayer('takeoff-line')) map.setLayoutProperty('takeoff-line','visibility',v);
+  });
+  document.getElementById('toggle-approach').addEventListener('change', (e)=> {
+    const v = e.target.checked ? 'visible' : 'none';
+    if (map.getLayer('approach-3d')) map.setLayoutProperty('approach-3d','visibility',v);
+    if (map.getLayer('approach-line')) map.setLayoutProperty('approach-line','visibility',v);
+  });
+  document.getElementById('toggle-trans').addEventListener('change', (e)=> {
+    const v = e.target.checked ? 'visible' : 'none';
+    if (map.getLayer('trans-3d')) map.setLayoutProperty('trans-3d','visibility',v);
+  });
+
+  </script>
+</body>
+</html>

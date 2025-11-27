@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DSM Viewer</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden !important;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: Arial, sans-serif;
+}
+
+#map {
+  position: absolute;
+  top: 60px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* ----- TOP BAR ----- */
+#topBar {
+  width: 100%;
+  height: 60px;
+  background: rgb(1, 6, 99);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2000;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+
+#leftGroup { display:flex; align-items:center; margin-right:20px; position:absolute; left:10px; }
+#logo { height:42px; margin-right:8px; }
+#logo-name { font-size:20px; font-weight:700; color:white; }
+
+#title {
+  font-size:24px;
+  font-weight:800;
+  color:white;
+  letter-spacing:2px;
+}
+
+/* Small button at top-left */
+#btnTile {
+  position: absolute;
+  top: 180px;
+  right: 18px;
+  z-index: 2100;
+  padding: 15px 10px;
+  font-size: 20px;
+  border-radius: 4px;
+  background-color: rgb(1, 6, 99);
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+.footer {
+  position: absolute;
+  bottom: 0;
+  background:#f1f1f1;
+  color:#333;
+  text-align:center;
+  padding:8px;
+  font-size:14px;
+  border-top:1px solid #ccc;
+  width:100%;
+}
+
+.layer-slider-control {
+  background: white;
+  padding: 10px;
+  border-radius: 5px;
+  box-shadow: 0 0 5px rgba(0,0,0,0.3);
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.layer-item { display: flex;align-items: center;margin-bottom: 6px; }
+.layer-item input[type="checkbox"] { margin-right: 6px; }
+.layer-item input[type="range"] { margin-left: 10px; flex: 1; }
+
+#height-display {
+  position: absolute;
+  bottom: 30px;
+  right: 10px;
+  background: rgba(255,255,255,0.9);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: bold;
+  border-radius: 4px;
+  z-index: 1000;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+#capsule-controls {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background: white;
+  padding: 10px;
+  border-radius: 6px;
+  box-shadow: 0 0 6px rgba(0,0,0,0.25);
+  z-index: 1000;
+  font-size: 13px;
+  min-width: 220px;
+}
+#capsule-controls label { display:block; margin-bottom:6px; cursor:pointer; }
+
+#info { position:absolute; top:64px; left:10px; z-index:1000; background:white;padding:6px;border-radius:6px; box-shadow:0 0 6px rgba(0,0,0,0.15); font-size:13px; }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topBar">
+  <div id="leftGroup">
+    <img id="logo" src="/GeoKnoLOGO_small.jpg" alt="GeoKno Logo">
+    <div id="logo-name">GEOKNO</div>
+  </div>
+  <div id="title">DELHI AIRPORT</div>
+</div>
+
+<!-- 3D switch button -->
+<button id="btnTile">Switch to 3D</button>
+
+<!-- Map container -->
+<div id="map">
+
+  <div id="capsule-controls">
+      <label><input type="checkbox" id="ellipse1Chk" /> Contour 1 </label>
+      <label><input type="checkbox" id="ellipse2Chk" /> Contour 2 </label>
+
+      <label><input type="checkbox" id="extensionsChk" /> Sides</label>
+
+      <hr style="margin:8px 0;">
+
+      <label><input type="checkbox" id="buildingToggle"> Load Buildings </label>
+  </div>
+
+  <div id="info" style="display:none">
+    <div><strong>Runway length:</strong> <span id="runwayLen">—</span> m</div>
+    <div><strong>Main radius (len/2):</strong> <span id="mainRadius">—</span> m</div>
+    <div><strong>Foci distance:</strong> <span id="fociDist">—</span> m</div>
+  </div>
+</div>
+
+<div class="footer">Developed by Geokno India Private Limited</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  const map = L.map("map").setView([28.561, 77.10], 14);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OSM"
+  }).addTo(map);
+
+  let buildingLayer = null;
+  const buildingGeoJSONUrl = "actual1.geojson";  // <-- Must be in same folder
+let activeEllipse = 0;   // 0 = none, 1 = ellipse1, 2 = ellipse2
+const threshold1 = 5;    // ellipse 1 height threshold
+const threshold2 = 10;   // ellipse 2 height threshold
+
+  const heightDiv = document.getElementById('height-display');
+
+  document.getElementById("buildingToggle").addEventListener("change", async (e) => {
+    if (e.target.checked) {
+        try {
+            const response = await fetch(buildingGeoJSONUrl);
+            const json = await response.json();
+
+            // Create building layer with onEachFeature that binds popup AND sets a click handler
+            buildingLayer = L.geoJSON(json, {
+                style: feature => getBuildingStyle(feature),
+                onEachFeature: (feature, layer) => {
+                    // Bind popup using mean_h if present
+                    const mh = feature.properties && feature.properties.mean_h != null
+                        ? feature.properties.mean_h
+                        : "N/A";
+                    layer.bindPopup("Height: " + mh + " m");
+
+                    // Ensure clicking a building updates the height display
+                    layer.on('click', (ev) => {
+                        // Prefer property value if available
+                        const hprop = feature.properties && feature.properties.mean_h;
+                        const h = (hprop === null || hprop === undefined) ? null : Number(hprop);
+                        if (h !== null && !isNaN(h)) {
+                            heightDiv.innerText = `Height: ${h.toFixed(2)} m`;
+                        } else {
+                            // Fallback to previous map-click logic could be added here.
+                            heightDiv.innerText = `Height: N/A`;
+                        }
+                        // open popup so the user sees it
+                        layer.openPopup();
+                    });
+                }
+            }).addTo(map);
+        } catch (err) {
+            console.error("GeoJSON load error:", err);
+            alert("Unable to load actual1.geojson");
+            e.target.checked = false;
+        }
+    } else {
+        if (buildingLayer) {
+            map.removeLayer(buildingLayer);
+            buildingLayer = null;
+        }
+    }
+  });
+
+  const dsmLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+    layers: "delhi:DIAL_DSM_50cm",
+    transparent: true,
+    format: "image/png",
+    tiled: true,
+    opacity: 0.6
+  });
+
+  const dtmLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+    layers: "delhi:DIAL_DTM_50cm",
+    transparent: true,
+    format: "image/png",
+    tiled: true,
+    opacity: 0.6
+  });
+
+  const orthoLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+    layers: "delhi:DIAL_Road_OrthoMosaic",
+    transparent: true,
+    format: "image/png",
+    tiled: true,
+    opacity: 0.7
+  });
+
+  const LayerSliderControl = L.Control.extend({
+    onAdd: function(map) {
+      const div = L.DomUtil.create("div", "layer-slider-control");
+      const layers = [
+        { name: "DSM", layer: dsmLayer, opacity: 0.6 },
+        { name: "DTM", layer: dtmLayer, opacity: 0.6 },
+        { name: "Orthophoto", layer: orthoLayer, opacity: 0.7 }
+      ];
+      layers.forEach(item => {
+        const row = L.DomUtil.create("div", "layer-item", div);
+        row.innerHTML = `
+          <input type="checkbox" /> ${item.name}
+          <input type="range" min="0" max="1" step="0.05" value="${item.opacity}"/>
+        `;
+        const chk = row.querySelector("input[type='checkbox']");
+        const slider = row.querySelector("input[type='range']");
+        chk.addEventListener("change", () => { chk.checked ? item.layer.addTo(map) : map.removeLayer(item.layer); });
+        slider.addEventListener("input", () => item.layer.setOpacity(slider.value));
+      });
+      return div;
+    }
+  });
+  map.addControl(new LayerSliderControl({ position: "topright" }));
+
+  const runwayRectCoords = [
+    [28.56760, 77.08500],
+    [28.55880, 77.12270],
+    [28.55800, 77.12260],
+    [28.56680, 77.08490]
+  ];
+
+  const runwayRect = L.polygon(runwayRectCoords, {
+    color: "black",
+    weight: 3,
+    fillOpacity: 0.07
+  }).addTo(map);
+
+  map.fitBounds(runwayRect.getBounds(), { padding: [50,50] });
+
+  function getCentroid(coords) {
+    let lat = 0, lng = 0;
+    coords.forEach(c => { lat += c[0]; lng += c[1]; });
+    return [lat / coords.length, lng / coords.length];
+  }
+
+  const centroid = getCentroid(runwayRectCoords);
+
+  function distanceMeters(a, b) {
+    return map.distance(L.latLng(a), L.latLng(b));
+  }
+
+  function computeRunwayLengthAndEdge(coords) {
+    // We use longest side as runway length (as in your earlier code)
+    let maxDist = 0;
+    let bestPair = [coords[0], coords[0]];
+    for (let i = 0; i < coords.length; i++) {
+      const p1 = coords[i];
+      const p2 = coords[(i+1) % coords.length];
+      const d = distanceMeters(p1, p2);
+      if (d > maxDist) {
+        maxDist = d;
+        bestPair = [p1, p2];
+      }
+    }
+    return { length: maxDist, edge: bestPair };
+  }
+
+  function computeBearing(p1, p2) {
+    const toRad = Math.PI/180, toDeg = 180/Math.PI;
+    const lat1 = p1[0]*toRad, lat2 = p2[0]*toRad;
+    const dLon = (p2[1]-p1[1])*toRad;
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1)*Math.sin(lat2) - Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon);
+    return (Math.atan2(y, x) * toDeg + 360) % 360;
+  }
+
+  const { length: runwayLength, edge: runwayEdge } = computeRunwayLengthAndEdge(runwayRectCoords);
+  const mainRadius = runwayLength / 2;
+  const runwayBearing = computeBearing(runwayEdge[0], runwayEdge[1]);
+
+  document.getElementById('runwayLen').innerText = Math.round(runwayLength);
+  document.getElementById('mainRadius').innerText = Math.round(mainRadius);
+  document.getElementById('info').style.display = 'block';
+
+  const shortSideA_idx = [1,2]; // side between coords[1] and coords[2]
+  const shortSideB_idx = [3,0]; // side between coords[3] and coords[0]
+
+  const pA1 = runwayRectCoords[shortSideA_idx[0]];
+  const pA2 = runwayRectCoords[shortSideA_idx[1]];
+  const pB1 = runwayRectCoords[shortSideB_idx[0]];
+  const pB2 = runwayRectCoords[shortSideB_idx[1]];
+
+  function midpoint(p, q) {
+    return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  }
+
+  // Foci: midpoints of the two shortest opposite sides (Option B)
+  const focus1 = midpoint(pA1, pA2);
+  const focus2 = midpoint(pB1, pB2);
+  const fociDistance = distanceMeters(focus1, focus2);
+
+  document.getElementById('fociDist').innerText = Math.round(fociDistance);
+
+  let majorAxis1 = runwayLength + 500.0 ;
+  let majorAxis2 = runwayLength + 1000.0;
+
+  // Convert to semi-major
+  let a1 = majorAxis1 / 2.0;
+  let a2 = majorAxis2 / 2.0;
+
+  // focal half-distance c = half distance between foci
+  const c = fociDistance / 2.0;
+
+  // Ensure a > c, otherwise enlarge a slightly
+  if (a1 <= c) {
+    console.warn("Ellipse1: a <= c, increasing a1 to c + 10 m");
+    a1 = c + 10;
+  }
+  if (a2 <= c) {
+    console.warn("Ellipse2: a <= c, increasing a2 to c + 10 m");
+    a2 = c + 10;
+  }
+
+  // semi-minor b = sqrt(a^2 - c^2)
+  const b1 = Math.sqrt(Math.max(0, a1*a1 - c*c));
+  const b2 = Math.sqrt(Math.max(0, a2*a2 - c*c));
+
+  // Center of ellipse = midpoint between foci
+  const center = midpoint(focus1, focus2);
+
+  // Angle of major axis (bearing from focus1->focus2)
+  const majorBearing = computeBearing(focus1, focus2); // degrees clockwise from north
+
+  // Helper: geodesic destination (meters, bearing degrees)
+  function destGeo(fromLatLng, distance_m, bearing_deg) {
+    // Uses spherical Earth with radius R = 6378137
+    const R = 6378137;
+    const lat1 = fromLatLng[0] * Math.PI/180;
+    const lon1 = fromLatLng[1] * Math.PI/180;
+    const brng = bearing_deg * Math.PI/180;
+    const dr = distance_m / R;
+
+    const lat2 = Math.asin(Math.sin(lat1)*Math.cos(dr) + Math.cos(lat1)*Math.sin(dr)*Math.cos(brng));
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(brng)*Math.sin(dr)*Math.cos(lat1),
+      Math.cos(dr) - Math.sin(lat1)*Math.sin(lat2)
+    );
+    return [lat2*180/Math.PI, lon2*180/Math.PI];
+  }
+
+  // Build ellipse coordinates (geodesic)
+  function buildEllipseCoords(a, b, centerLatLng, majorBearingDeg, numPoints=180) {
+    const coords = [];
+    const theta0 = majorBearingDeg * Math.PI/180; // orientation angle in radians (bearing from north)
+    // theta parameter runs 0..2pi
+    for (let i=0;i<=numPoints;i++) {
+      const t = (i/numPoints) * 2*Math.PI;
+      // param coords in ellipse local frame: u along major axis, v along minor axis
+      const u = a * Math.cos(t);   // meters along major axis
+      const v = b * Math.sin(t);   // meters along minor axis
+
+      const northComp = u * Math.cos(theta0) + v * (-Math.sin(theta0));
+      const eastComp  = u * Math.sin(theta0) + v * Math.cos(theta0);
+
+      const distance = Math.sqrt(northComp*northComp + eastComp*eastComp);
+      // bearing for destGeo: atan2(east, north) where 0 = north
+      const bearing = (Math.atan2(eastComp, northComp) * 180/Math.PI + 360) % 360;
+
+      const pt = destGeo(centerLatLng, distance, bearing);
+      coords.push(pt);
+    }
+    return coords;
+  }
+
+  // Layers to hold the ellipses and extensions
+  let ellipse1Layer = null;
+  let ellipse2Layer = null;
+  let extensionLayers = [];
+
+  function showEllipse1() {
+    if (ellipse1Layer) return;
+    const coords = buildEllipseCoords(a1, b1, center, majorBearing, 256);
+    // IMPORTANT: make ellipse non-interactive so it doesn't block clicks on buildings
+    ellipse1Layer = L.polygon(coords, {
+      color: "green",
+      weight: 2,
+      fillOpacity: 0.08,
+      interactive: false
+    }).addTo(map);
+    ellipse1Layer.bindPopup(`Ellipse 1<br>a=${a1.toFixed(1)} m, b=${b1.toFixed(1)} m, c=${c.toFixed(1)} m`);
+  }
+  function hideEllipse1() {
+    if (ellipse1Layer) {
+      map.removeLayer(ellipse1Layer);
+      ellipse1Layer = null;
+    }
+  }
+  function showEllipse2() {
+    if (ellipse2Layer) return;
+    const coords = buildEllipseCoords(a2, b2, center, majorBearing, 256);
+    // IMPORTANT: make ellipse non-interactive so it doesn't block clicks on buildings
+    ellipse2Layer = L.polygon(coords, {
+      color: "orange",
+      weight: 2,
+      fillOpacity: 0.06,
+      interactive: false
+    }).addTo(map);
+    ellipse2Layer.bindPopup(`Ellipse 2 (+1000 m major axis)<br>a=${a2.toFixed(1)} m, b=${b2.toFixed(1)} m`);
+  }
+  function hideEllipse2() {
+    if (ellipse2Layer) {
+      map.removeLayer(ellipse2Layer);
+      ellipse2Layer = null;
+    }
+  }
+
+  const extensionDistance = 1000; // meters
+  const extensionAngleDeg = 15; // degrees offset from outward direction
+ function buildSideExtension(sideStart, sideEnd) {
+    const start = sideStart;
+    const end = sideEnd;
+
+    const sideCenter = midpoint(start, end);
+
+    const edgeBearing = computeBearing(start, end);
+
+    const toCentroidBearing = computeBearing(sideCenter, centroid);
+
+    const outwardBearing = (toCentroidBearing + 180) % 360;
+
+    const startProj1 = destGeo(start, extensionDistance, (outwardBearing - extensionAngleDeg + 360) % 360);
+    const startProj2 = destGeo(start, extensionDistance, (outwardBearing + extensionAngleDeg) % 360);
+
+    const endProj1 = destGeo(end, extensionDistance, (outwardBearing - extensionAngleDeg + 360) % 360);
+    const endProj2 = destGeo(end, extensionDistance, (outwardBearing + extensionAngleDeg) % 360);
+
+    function distToCentroid(pt) { return distanceMeters(pt, centroid); }
+    const startProj = distToCentroid(startProj1) > distToCentroid(startProj2) ? startProj1 : startProj2;
+    const endProj   = distToCentroid(endProj1)   > distToCentroid(endProj2)   ? endProj1   : endProj2;
+
+    // The trapezoid goes: start -> end -> endProj -> startProj
+    return [ start, end, endProj, startProj ];
+  }
+
+  function showExtensions() {
+    // remove existing
+    extensionLayers.forEach(l => map.removeLayer(l));
+    extensionLayers = [];
+
+    // Build for the two short sides (Option B) 
+    const trapA = buildSideExtension(pA1, pA2);
+    const trapB = buildSideExtension(pB1, pB2);
+
+    const tA = L.polygon(trapA, { color: "red", weight: 2, fillOpacity: 0.15 }).addTo(map);
+    const tB = L.polygon(trapB, { color: "red", weight: 2, fillOpacity: 0.15 }).addTo(map);
+
+    extensionLayers.push(tA, tB);
+
+    // Optionally label them
+    tA.bindPopup("Extension (side 1→2)");
+    tB.bindPopup("Extension (side 3→0)");
+  }
+
+  function hideExtensions() {
+    extensionLayers.forEach(l => map.removeLayer(l));
+    extensionLayers = [];
+  }
+
+function getBuildingStyle(feature) {
+
+    const rawH = feature.properties.mean_h;
+    const height = isNaN(Number(rawH)) ? 0 : Number(rawH);
+
+    // compute a simple centroid for polygon feature to test membership
+    let centroidCoord = null;
+    if (feature.geometry && feature.geometry.type === "Polygon") {
+        centroidCoord = feature.geometry.coordinates[0] && feature.geometry.coordinates[0][0] ? feature.geometry.coordinates[0][0] : feature.geometry.coordinates[0];
+    } else if (feature.geometry && feature.geometry.type === "Point") {
+        centroidCoord = feature.geometry.coordinates;
+    } else {
+        // fallback — treat as not inside
+        centroidCoord = null;
+    }
+
+    const latlng = centroidCoord ? L.latLng(centroidCoord[1], centroidCoord[0]) : null;
+
+    if (activeEllipse === 1) {
+        const inside = latlng && ellipse1Layer && pointInPolygon(latlng, ellipse1Layer);
+
+        if (inside && height > threshold1)
+            return { color: "red", weight: 1, fillOpacity: 0.6 };
+
+        return { color: "blue", weight: 1, fillOpacity: 0.3 };
+    }
+
+    if (activeEllipse === 2) {
+        const inside = latlng && ellipse2Layer && pointInPolygon(latlng, ellipse2Layer);
+
+        if (inside && height > threshold2)
+            return { color: "red", weight: 1, fillOpacity: 0.6 };
+
+        return { color: "blue", weight: 1, fillOpacity: 0.3 };
+    }
+
+    return { color: "blue", weight: 1, fillOpacity: 0.4 };
+}
+
+/* more robust pointInPolygon: handles arrays returned by getLatLngs() */
+function pointInPolygon(point, polygon) {
+    // polygon.getLatLngs() may return [ [ latlngs... ] ] for simple polygon
+    let rings = polygon.getLatLngs();
+    if (!Array.isArray(rings)) return false;
+    if (rings.length === 0) return false;
+
+    // choose outer ring (handle nested arrays)
+    let poly = rings[0];
+    if (!Array.isArray(poly) || poly.length === 0) {
+        // try to flatten one level
+        poly = [].concat(...rings);
+    }
+
+    let x = point.lng, y = point.lat;
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        let xi = poly[i].lng, yi = poly[i].lat;
+        let xj = poly[j].lng, yj = poly[j].lat;
+
+        const intersect = ((yi > y) !== (yj > y)) &&
+                          (x < (xj - xi) * (y - yi) / (yj - yi + 0.0) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+function recolorBuildings() {
+    if (!buildingLayer) return;
+    buildingLayer.setStyle(f => getBuildingStyle(f));
+}
+
+document.getElementById('ellipse1Chk').addEventListener('change', (e) => {
+    if (e.target.checked) {
+        showEllipse1();
+        activeEllipse = 1;
+        recolorBuildings();
+    } else {
+        hideEllipse1();
+        if (activeEllipse === 1) activeEllipse = 0;
+        recolorBuildings();
+    }
+});
+
+document.getElementById('ellipse2Chk').addEventListener('change', (e) => {
+    if (e.target.checked) {
+        showEllipse2();
+        activeEllipse = 2;
+        recolorBuildings();
+    } else {
+        hideEllipse2();
+        if (activeEllipse === 2) activeEllipse = 0;
+        recolorBuildings();
+    }
+});
+
+  document.getElementById('extensionsChk').addEventListener('change', (e) => {
+    if (e.target.checked) showExtensions(); else hideExtensions();
+  });
+
+  map.on('click', async (e) => {
+    const latlng = e.latlng;
+    const size = map.getSize();
+    const bounds = map.getBounds();
+
+    function getFeatureInfoURL(layer) {
+      return `/geoserver/delhi/wms?service=WMS&version=1.1.1&request=GetFeatureInfo` +
+             `&layers=${layer}&query_layers=${layer}` +
+             `&bbox=${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}` +
+             `&width=${size.x}&height=${size.y}` +
+             `&x=${Math.floor(map.latLngToContainerPoint(latlng).x)}` +
+             `&y=${Math.floor(map.latLngToContainerPoint(latlng).y)}` +
+             `&info_format=application/json&srs=EPSG:4326`;
+    }
+
+    try {
+      const [dsm, dtm] = await Promise.all([
+        fetch(getFeatureInfoURL("delhi:DIAL_DSM_50cm")).then(r => r.json()),
+        fetch(getFeatureInfoURL("delhi:DIAL_DTM_50cm")).then(r => r.json())
+      ]);
+
+      const dsmValue = dsm?.features?.[0]?.properties?.[Object.keys(dsm.features[0].properties)[0]];
+      const dtmValue = dtm?.features?.[0]?.properties?.[Object.keys(dtm.features[0].properties)[0]];
+
+      const h = (dsmValue != null && dtmValue != null) ? (dsmValue - dtmValue) : null;
+
+      heightDiv.innerText = h != null ? `Height: ${h.toFixed(2)} m` : "Height: N/A";
+    } catch(err) {
+      heightDiv.innerText = "Height: Error";
+      console.error(err);
+    }
+  });
+
+  document.getElementById("btnTile").addEventListener("click", () => {
+    window.location.href = "tile.html";
+  });
+
+});
+</script>
+
+</body>
+</html>

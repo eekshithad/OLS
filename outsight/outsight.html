@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Outsight</title>
+
+  <style>
+    body { margin:0; font-family:'Segoe UI', Roboto, sans-serif; background:#f4f8fb; color:#1a1a1a; }
+
+    /* HEADER */
+    header {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:16px 30px;
+      background:#ffffffee;
+      backdrop-filter: blur(8px);
+      position:fixed;
+      top:0;
+      width:100%;
+      z-index:999;
+      box-shadow:0 2px 10px rgba(0,0,0,0.08);
+    }
+
+    /* Logos */
+    .logo { height:48px; }
+
+    nav a {
+      margin:0 18px;
+      text-decoration:none;
+      font-weight:600;
+      color:#003366;
+      font-size:17px;
+    }
+
+    nav a:hover { color:#0078ff; }
+
+    /* Desktop nav */
+    nav { display:flex; align-items:center; }
+
+    /* Hamburger (mobile) */
+    .hamburger {
+      display:none;
+      font-size:32px;
+      cursor:pointer;
+      user-select:none;
+    }
+
+    /* Mobile dropdown menu */
+    .mobile-menu {
+      display:none;
+      flex-direction:column;
+      background:white;
+      padding:15px 25px;
+      box-shadow:0 4px 10px rgba(0,0,0,0.1);
+      position:absolute;
+      top:70px;
+      left:30px;
+      border-radius:8px;
+      z-index:999;
+    }
+
+    .mobile-menu a {
+      padding:12px 0;
+      font-size:18px;
+      border-bottom:1px solid #eee;
+      color:#003366;
+      text-decoration:none;
+      font-weight:600;
+    }
+    .mobile-menu a:last-child { border-bottom:none; }
+
+    /* SECTIONS */
+    .hero, .section {
+      padding:150px 80px 120px 80px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:60px;
+    }
+
+    .hero-text, .section div { max-width:50%; }
+
+    h1 { font-size:52px; font-weight:800; color:#002952; margin-bottom:20px; line-height:1.15; }
+    h2 { font-size:41px; font-weight:700; color:#003a70; margin-bottom:18px; }
+    h3 { font-size:38px; font-weight:700; }
+    h4 { font-size:28px; font-weight:700; color:#435989; margin-bottom:18px; }
+
+    p { font-size:19px; line-height:1.65; color:#333; opacity:0.9; }
+
+    video { width:48%; border-radius:14px; box-shadow:0 10px 25px rgba(0,0,0,0.15); }
+
+    .bg-light-blue { background:#e9f4ff; }
+    .bg-soft-green { background:#eef9f0; }
+
+    /* CONTACT */
+    .contact {
+      padding:120px 80px;
+      text-align:center;
+      background:#003a70;
+      color:white;
+    }
+
+    .contact form {
+      margin:auto;
+      margin-top:40px;
+      max-width:650px;
+      display:flex;
+      flex-direction:column;
+      gap:20px;
+      padding:40px;
+      background:white;
+      border-radius:16px;
+      box-shadow:0 8px 20px rgba(0,0,0,0.2);
+    }
+
+    .contact input,
+    .contact textarea {
+      padding:16px;
+      border-radius:10px;
+      border:1px solid #ccc;
+      font-size:17px;
+    }
+
+    .contact button {
+      padding:15px;
+      border-radius:10px;
+      background:#0078ff;
+      border:none;
+      font-size:20px;
+      color:white;
+      cursor:pointer;
+      font-weight:600;
+    }
+
+    .contact button:hover { background:#005fcc; }
+
+    /* MOBILE RESPONSIVE */
+    @media (max-width: 900px) {
+      nav { display:none; }
+      .hamburger { display:block; }
+
+      .logo { height:40px; }
+
+      .hero,
+      .section {
+        flex-direction:column;
+        padding:130px 25px 80px 25px;
+        gap:40px;
+        text-align:center;
+      }
+
+      .hero-text,
+      .section div { max-width:100%; text-align:center; }
+
+      video { width:100% !important; }
+
+      h1 { font-size:32px; }
+      h2 { font-size:28px; }
+      p { font-size:16px; }
+
+      #experience { padding:150px 25px 50px 25px !important; }
+      #experience div { grid-template-columns:1fr !important; }
+
+      .contact { padding:80px 25px !important; }
+      .contact form { width:100%; padding:25px !important; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex; justify-content:space-between; align-items:center; width:90%; margin:0 auto;">
+    <!-- LEFT: Outsight + nav -->
+    <div style="display:flex; align-items:center; gap:20px;">
+      <a href="https://www.outsight.ai/" target="_blank">
+        <img src="outsight.png" class="logo" />
+      </a>
+      <nav>
+        <a onclick="scrollToSection('product')">Product</a>
+        <a onclick="scrollToSection('usecase')">Usecase</a>
+        <a onclick="scrollToSection('contact')">Contact</a>
+      </nav>
+      <div class="hamburger" onclick="toggleMenu()">☰</div>
+    </div>
+
+    <!-- RIGHT: GeoKno -->
+    <a href="https://www.geokno.com/" target="_blank">
+      <img src="GeoKnoLOGO_small.jpg" class="logo" />
+    </a>
+  </div>
+</header>
+
+<!-- Mobile Menu -->
+<div class="mobile-menu" id="mobileMenu">
+  <a onclick="scrollToSection('product')">Product</a>
+  <a onclick="scrollToSection('usecase')">Usecase</a>
+  <a onclick="scrollToSection('contact')">Contact</a>
+</div>
+
+<!-- HERO -->
+<section class="hero" id="home">
+  <div class="hero-text">
+    <h1>Advanced 3D Perception for Real-World Intelligence</h1>
+    <p>Outsight and Geokno bring together cutting-edge LiDAR technology and real-time analytics to deliver unparalleled spatial awareness and intelligent automation across industries.</p>
+  </div>
+  <video src="Shift_Perception_Overview_st5byz.mp4" autoplay loop muted></video>
+</section>
+
+<!-- PRODUCT -->
+<section class="section bg-light-blue" id="product">
+  <div>
+    <h2>Full-Scale Situational Awareness</h2>
+    <p>Get a unified, accurate understanding of your environment at all times. Our perception engine continuously detects, tracks and analyzes movement — even in challenging lighting conditions.</p>
+  </div>
+  <video src="second1.mp4" autoplay loop muted></video>
+</section>
+
+<!-- USE CASE -->
+<section class="section bg-soft-green" id="usecase">
+  <div>
+    <h2>Vehicle & Object Intelligence</h2>
+    <p>Accurately track vehicles, two-wheelers and pedestrians with precision analytics. Set dynamic alerts and integrate insights directly into command dashboards and automation systems.</p>
+  </div>
+  <video src="Tracking_Vehicles_at_roads_ga9zpt.mp4" autoplay loop muted></video>
+</section>
+
+<!-- CONTACT -->
+<section class="contact" id="contact">
+  <h3>Contact Us</h3>
+  <div style="margin:auto; margin-top:40px; max-width:650px;">
+    <!-- Replace the src below with your Google Form embed link -->
+    <iframe 
+      src="https://docs.google.com/forms/d/e/1FAIpQLSc3wYpuLD1HnkzxeM1TdOF-n4JShn5iOIjGUwop6FBckTn51g/viewform?usp=dialog" 
+      width="100%" 
+      height="800" 
+      frameborder="0" 
+      marginheight="0" 
+      marginwidth="0">
+      Loading…
+    </iframe>
+  </div>
+</section>
+
+
+<script>
+function scrollToSection(id) {
+  document.getElementById(id).scrollIntoView({ behavior: "smooth" });
+  toggleMenu(true); // close menu on mobile click
+}
+
+function toggleMenu(forceClose = false) {
+  const menu = document.getElementById("mobileMenu");
+  if (forceClose) { menu.style.display = "none"; return; }
+  menu.style.display = menu.style.display === "flex" ? "none" : "flex";
+}
+</script>
+
+</body>
+</html>

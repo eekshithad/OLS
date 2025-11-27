@@ -1,0 +1,26 @@
+{
+  "name": "building",
+  "version": "1.0.0",
+  "description": "",
+  "main": "delhi.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eekshithad/OLS.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/eekshithad/OLS/issues"
+  },
+  "homepage": "https://github.com/eekshithad/OLS#readme",
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-fetch": "^2.7.0",
+    "request": "^2.88.2"
+  }
+}

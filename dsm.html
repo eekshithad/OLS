@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DSM Viewer — 2D + 3D Buildings (height_mean)</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <!-- MapLibre GL JS CSS -->
+  <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+
+  <style>
+    html,body { height:100%; margin:0; padding:0; font-family: Arial, sans-serif; }
+    .navbar { background:#003366; color:white; padding:12px 20px; font-size:18px; font-weight:bold; text-align:center; }
+    .footer  { background:#f1f1f1; color:#333; text-align:center; padding:8px; font-size:13px; border-top:1px solid #ccc; }
+
+    /* Map containers — stack on top of each other; only one visible at once */
+    #maps {
+      position:relative;
+      height: calc(100vh - 100px);
+      width:100%;
+    }
+    #map2d, #map3d {
+      position:absolute;
+      top:0; left:0; right:0; bottom:0;
+      height:100%; width:100%;
+    }
+    #map3d { visibility:hidden; } /* start hidden */
+
+    /* Controls */
+    .controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1200;
+      background: white;
+      padding: 8px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      font-size: 13px;
+    }
+    .controls label { display:block; margin-bottom:6px; cursor:pointer; }
+    .controls button { margin-top:6px; padding:6px 8px; font-size:13px; cursor:pointer; }
+
+    /* Height display */
+    #height-display {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.95);
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: bold;
+      border-radius: 4px;
+      z-index: 1000;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+
+  </style>
+</head>
+<body>
+  <div class="navbar">DELHI AIRPORT</div>
+
+  <div id="maps">
+    <div id="map2d"></div>
+    <div id="map3d"></div>
+
+    <div class="controls" id="controls">
+      <label><input type="checkbox" id="loadBuildings"> Load Buildings JSON</label>
+      <button id="modeSwitch">Switch to 3D</button>
+    </div>
+
+  </div>
+
+  <div class="footer">Developed by Geokno India Private Limited</div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- MapLibre GL JS (Mapbox GL JS compatible) -->
+  <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+
+  <script>
+  (function() {
+    // --------------------------
+    // Configuration
+    // --------------------------
+    const BUILDINGS_GEOJSON_URL = "runway_contours.geojson"; // update if needed
+    const MAPLIBRE_STYLE = "https://demotiles.maplibre.org/style.json"; // demo style
+
+    // --------------------------
+    // Initialize Leaflet 2D Map
+    // --------------------------
+    const map = L.map('map2d').setView([28.561, 77.10], 14);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OSM"
+    }).addTo(map);
+
+    // WMS layers (as in your original code — kept for context)
+    const dsmLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+      layers: "delhi:DIAL_DSM_50cm",
+      transparent: true, format: "image/png", tiled: true, opacity: 0.6
+    });
+    const dtmLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+      layers: "delhi:DIAL_DTM_50cm",
+      transparent: true, format: "image/png", tiled: true, opacity: 0.6
+    });
+    const orthoLayer = L.tileLayer.wms("/geoserver/delhi/wms", {
+      layers: "delhi:DIAL_Road_OrthoMosaic",
+      transparent: true, format: "image/png", tiled: true, opacity: 0.7
+    });
+
+    // Layer slider control (simple)
+    const LayerSliderControl = L.Control.extend({
+      onAdd: function(map) {
+        const div = L.DomUtil.create("div", "layer-slider-control");
+        const layers = [
+          { name: "DSM", layer: dsmLayer, opacity: 0.6 },
+          { name: "DTM", layer: dtmLayer, opacity: 0.6 },
+          { name: "Orthophoto", layer: orthoLayer, opacity: 0.7 }
+        ];
+        layers.forEach(item => {
+          const row = L.DomUtil.create("div", "layer-item", div);
+          row.innerHTML = `
+            <input type="checkbox" /> ${item.name}
+            <input type="range" min="0" max="1" step="0.05" value="${item.opacity}"/>
+          `;
+          const chk = row.querySelector("input[type='checkbox']");
+          const slider = row.querySelector("input[type='range']");
+          chk.addEventListener("change", () => { chk.checked ? item.layer.addTo(map) : map.removeLayer(item.layer); });
+          slider.addEventListener("input", () => item.layer.setOpacity(slider.value));
+        });
+        return div;
+      }
+    });
+    map.addControl(new LayerSliderControl({ position: "topright" }));
+
+    // Example runway polygon (from your original)
+    const runwayRectCoords = [
+      [28.56883, 77.08464],
+      [28.56000, 77.12600],
+      [28.55500, 77.12525],
+      [28.56550, 77.08200]
+    ];
+    const runwayRect = L.polygon(runwayRectCoords, { color: "black", weight: 3, fillOpacity: 0.07 }).addTo(map);
+    map.fitBounds(runwayRect.getBounds(), { padding: [50,50] });
+
+    function getCentroid(coords) {
+      let lat = 0, lng = 0;
+      coords.forEach(c => { lat += c[0]; lng += c[1]; });
+      return [lat / coords.length, lng / coords.length];
+    }
+    const centroid = getCentroid(runwayRectCoords);
+
+    function distanceMeters(a, b) { return map.distance(L.latLng(a), L.latLng(b)); }
+    function computeRunwayLengthAndEdge(coords) {
+      let maxDist = 0, bestPair = [coords[0], coords[0]];
+      for (let i=0;i<coords.length;i++) {
+        const p1 = coords[i];
+        const p2 = coords[(i+1)%coords.length];
+        const d = distanceMeters(p1,p2);
+        if (d > maxDist) { maxDist = d; bestPair = [p1,p2]; }
+      }
+      return { length: maxDist, edge: bestPair };
+    }
+    function computeBearing(p1,p2){
+      const toRad = Math.PI/180, toDeg = 180/Math.PI;
+      const lat1 = p1[0]*toRad, lat2 = p2[0]*toRad;
+      const dLon = (p2[1]-p1[1])*toRad;
+      const y = Math.sin(dLon) * Math.cos(lat2);
+      const x = Math.cos(lat1)*Math.sin(lat2) - Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon);
+      return (Math.atan2(y,x) * toDeg + 360) % 360;
+    }
+    const { length: runwayLength, edge: runwayEdge } = computeRunwayLengthAndEdge(runwayRectCoords);
+    const mainRadius = runwayLength / 2;
+    const runwayBearing = computeBearing(runwayEdge[0], runwayEdge[1]);
+    document.getElementById('runwayLen').innerText = Math.round(runwayLength);
+    document.getElementById('mainRadius').innerText = Math.round(mainRadius);
+    document.getElementById('infoPanel').style.display = 'block';
+
+    // Green cones (kept similar to your original)
+    const coneLayers = { all: [] };
+    function generateGreenFan(center, bearing) {
+      coneLayers.all.forEach(layer => map.removeLayer(layer));
+      coneLayers.all = [];
+      const maxLength = runwayLength + 1500;
+      const step = 100;
+      const maxWidth = 500;
+      function dest(center, distance, bearingDeg) {
+        const R = 6378137;
+        const b = bearingDeg * Math.PI/180;
+        const lat1 = center[0]*Math.PI/180;
+        const lon1 = center[1]*Math.PI/180;
+        const dr = distance / R;
+        const lat2 = Math.asin(Math.sin(lat1)*Math.cos(dr) + Math.cos(lat1)*Math.sin(dr)*Math.cos(b));
+        const lon2 = lon1 + Math.atan2(
+          Math.sin(b)*Math.sin(dr)*Math.cos(lat1),
+          Math.cos(dr) - Math.sin(lat1)*Math.sin(lat2)
+        );
+        return [lat2*180/Math.PI, lon2*180/Math.PI];
+      }
+      function build(direction) {
+        let leftSide = [], rightSide = [];
+        for (let d = 0; d <= maxLength; d += step) {
+          const w = (d / maxLength) * maxWidth;
+          const mid = dest(center, d, direction);
+          const leftPt = dest(mid, w, direction - 90);
+          const rightPt = dest(mid, w, direction + 90);
+          leftSide.push(leftPt);
+          rightSide.push(rightPt);
+        }
+        const coords = [...leftSide, ...rightSide.reverse()];
+        const fan = L.polygon(coords, { color: "green", weight: 3, fillOpacity: 0.15 }).addTo(map);
+        coneLayers.all.push(fan);
+      }
+      build(bearing);
+      build(bearing + 180);
+    }
+    document.getElementById('conesChk').addEventListener('change', (evt) => {
+      if (evt.target.checked) generateGreenFan(centroid, runwayBearing);
+      else { coneLayers.all.forEach(layer => map.removeLayer(layer)); coneLayers.all = []; }
+    });
+
+    // --------------------------
+    // GeoJSON building layer (Leaflet)
+    // --------------------------
+    let buildingLayer2d = null;
+    let buildingsGeojsonCache = null; // store for reuse (and for MapLibre)
+
+    async function loadBuildingsGeoJSON() {
+      if (buildingsGeojsonCache) return buildingsGeojsonCache;
+      try {
+        const resp = await fetch(BUILDINGS_GEOJSON_URL);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const geojson = await resp.json();
+        buildingsGeojsonCache = geojson;
+        return geojson;
+      } catch (err) {
+        console.error("Failed to load GeoJSON:", err);
+        throw err;
+      }
+    }
+
+    function styleBuildingFeature(feature) {
+      return {
+        color: "#2a8f2a",
+        weight: 1,
+        fillOpacity: 0.5
+      };
+    }
+
+    function onEachBuildingFeature(feature, layer) {
+      // store properties for quick access
+      layer.feature = feature;
+
+      // Mouseover highlight
+      layer.on('mouseover', (e) => {
+        e.target.setStyle({ weight: 2, color: "#1a5e1a", fillOpacity: 0.65 });
+      });
+      layer.on('mouseout', (e) => {
+        e.target.setStyle({ weight: 1, color: "#2a8f2a", fillOpacity: 0.5 });
+      });
+
+      // Click shows popup with mean/median/mode (use properties directly)
+      layer.on('click', (e) => {
+        const props = feature.properties || {};
+        const mean = (props.height_mean != null) ? props.height_mean : "N/A";
+        const median = (props.height_median != null) ? props.height_median : "N/A";
+        const mode = (props.height_mode != null) ? props.height_mode : "N/A";
+
+        const content = `
+          <div style="font-size:13px">
+            <div><strong>Mean:</strong> ${mean}</div>
+            <div><strong>Median:</strong> ${median}</div>
+            <div><strong>Mode:</strong> ${mode}</div>
+          </div>
+        `;
+        L.popup({ maxWidth: 260 }).setLatLng(e.latlng).setContent(content).openOn(map);
+
+        // Also update the small height-display box (for convenience)
+        const hd = document.getElementById('height-display');
+        hd.innerText = `Mean: ${mean}  •  Median: ${median}  •  Mode: ${mode}`;
+      });
+    }
+
+    // Hook up the Load Buildings checkbox
+    const loadBuildingsCheckbox = document.getElementById('loadBuildings');
+    loadBuildingsCheckbox.addEventListener('change', async (evt) => {
+      if (evt.target.checked) {
+        try {
+          const geojson = await loadBuildingsGeoJSON();
+
+          // Add to Leaflet
+          buildingLayer2d = L.geoJSON(geojson, {
+            style: styleBuildingFeature,
+            onEachFeature: onEachBuildingFeature
+          }).addTo(map);
+
+          // Feed this data into MapLibre (if it's already initialized)
+          if (map3d && map3dIsReady) {
+            if (map3d.getSource('buildings')) {
+              try { map3d.getSource('buildings').setData(geojson); }
+              catch(e){ console.warn("Could not set data on map3d source yet:", e); }
+            }
+          }
+        } catch(err) {
+          alert("Failed to load buildings geojson. Check console.");
+          loadBuildingsCheckbox.checked = false;
+        }
+      } else {
+        if (buildingLayer2d) {
+          map.removeLayer(buildingLayer2d);
+          buildingLayer2d = null;
+        }
+        // clear height display
+        document.getElementById('height-display').innerText = "Height: N/A";
+
+        // also clear MapLibre source data
+        if (map3d && map3dIsReady && map3d.getSource('buildings')) {
+          try {
+            map3d.getSource('buildings').setData({ "type":"FeatureCollection", "features": [] });
+          } catch(e) { /* ignore */ }
+        }
+      }
+    });
+
+    // --------------------------
+    // MapLibre 3D Map Initialization
+    // --------------------------
+    let map3d = null;
+    let map3dIsReady = false;
+
+    function initMapLibre() {
+      if (map3d) return; // already inited
+      map3d = new maplibregl.Map({
+        container: 'map3d',
+        style: MAPLIBRE_STYLE,
+        center: [77.095, 28.556],
+        zoom: 15,
+        pitch: 55,
+        bearing: -20,
+        antialias: true
+      });
+
+      // Add ESRI satellite raster as optional background (kept commented in case of CORS)
+      map3d.on('load', () => {
+        map3dIsReady = true;
+
+        // Add an (initially empty) geojson source for buildings
+        if (!map3d.getSource('buildings')) {
+          map3d.addSource('buildings', {
+            type: 'geojson',
+            data: { "type": "FeatureCollection", "features": [] }
+          });
+        }
+
+        // Add a fill-extrusion layer using height_mean as height (coalesce fallback to 0)
+        // MapLibre expressions: use ["get","height_mean"] — ensure your property is numeric in GeoJSON
+        if (!map3d.getLayer('3d-buildings')) {
+          map3d.addLayer({
+            id: '3d-buildings',
+            type: 'fill-extrusion',
+            source: 'buildings',
+            paint: {
+              // color: green with slight variation
+              'fill-extrusion-color': ['case',
+                ['has', 'height_mean'], '#00AA44',
+                '#888888'
+              ],
+              // use height_mean directly; if null/undefined, fallback to 0 via 'coalesce' expression
+              'fill-extrusion-height': ['coalesce', ['to-number', ['get', 'height_mean']], 0],
+              'fill-extrusion-base': 0,
+              'fill-extrusion-opacity': 0.9
+            }
+          }, /* insertBefore */ undefined);
+        }
+
+        // If buildings were loaded already in 2D, push them into the MapLibre source
+        if (buildingsGeojsonCache) {
+          try {
+            map3d.getSource('buildings').setData(buildingsGeojsonCache);
+            // optionally zoom to bounds of the loaded data
+            // const bbox = turf.bbox(buildingsGeojsonCache); ...
+          } catch (e) {
+            console.warn("Could not set buildings data immediately:", e);
+          }
+        }
+      });
+    }
+
+    // initialize MapLibre background now so switching is fast
+    initMapLibre();
+
+    // --------------------------
+    // 2D <-> 3D Switch Logic
+    // --------------------------
+    const modeBtn = document.getElementById('modeSwitch');
+    modeBtn.addEventListener('click', () => {
+      const m2d = document.getElementById('map2d');
+      const m3d = document.getElementById('map3d');
+      const is3D = (m3d.style.visibility === 'visible');
+
+      if (!is3D) {
+        // switch to 3D
+        const c = map.getCenter(); const z = map.getZoom();
+        // ensure MapLibre is ready
+        if (!map3d) initMapLibre();
+
+        // copy view
+        map3d.jumpTo({
+          center: [c.lng, c.lat],
+          zoom: Math.max(z - 0.4, 12),
+          pitch: 55,
+          bearing: -20
+        });
+
+        // make 3D visible, hide 2D
+        m3d.style.visibility = 'visible';
+        m2d.style.visibility = 'hidden';
+        modeBtn.innerText = 'Switch to 2D';
+
+        // ensure MapLibre has the building data loaded
+        if (buildingsGeojsonCache && map3dIsReady) {
+          try { map3d.getSource('buildings').setData(buildingsGeojsonCache); }
+          catch(e){ console.warn("Error setting map3d source data:",e); }
+        }
+
+        // trigger resize after visibility change
+        setTimeout(()=> { if(map3d) map3d.resize(); }, 220);
+
+      } else {
+        // switch back to 2D
+        const c3 = map3d.getCenter(); const z3 = map3d.getZoom();
+        m3d.style.visibility = 'hidden';
+        m2d.style.visibility = 'visible';
+        modeBtn.innerText = 'Switch to 3D';
+
+        // set Leaflet view to center from MapLibre
+        map.setView([c3.lat, c3.lng], Math.round(z3 + 0.5));
+      }
+    });
+
+    // --------------------------
+    // Optional: allow clicking features in 3D to show popup (MapLibre click)
+    // --------------------------
+    // We'll add a MapLibre click handler that opens a Leaflet popup on the 2D map
+    // so that the display is consistent (only when building data exists)
+    function enableMaplibreFeatureClick() {
+      if (!map3d || !map3dIsReady) return;
+
+      map3d.on('click', (e) => {
+        // Query rendered features in the buildings layer
+        const features = map3d.queryRenderedFeatures(e.point, { layers: ['3d-buildings'] });
+        if (features && features.length) {
+          const f = features[0];
+          const props = f.properties || {};
+          const mean = (props.height_mean != null && props.height_mean !== "null") ? props.height_mean : "N/A";
+          const median = (props.height_median != null && props.height_median !== "null") ? props.height_median : "N/A";
+          const mode = (props.height_mode != null && props.height_mode !== "null") ? props.height_mode : "N/A";
+
+          // Convert point to latlng and show a Leaflet popup on the 2D map (even when 3D visible)
+          // This popup will float above the 2D container; we'll position it using Leaflet.
+          const lat = e.lngLat.lat, lng = e.lngLat.lng;
+          const content = `
+            <div style="font-size:13px">
+              <div><strong>Mean:</strong> ${mean}</div>
+              <div><strong>Median:</strong> ${median}</div>
+              <div><strong>Mode:</strong> ${mode}</div>
+            </div>
+          `;
+          // If 3D is visible, temporarily show the 2D popup by creating a small overlay marker/popup
+          L.popup({ maxWidth: 260, autoClose: true })
+           .setLatLng([lat,lng])
+           .setContent(content)
+           .openOn(map);
+
+          // Also update the height-display
+          document.getElementById('height-display').innerText = `Mean: ${mean}  •  Median: ${median}  •  Mode: ${mode}`;
+        }
+      });
+    }
+    // call once map3d is ready
+    (function pollMaplibreReady() {
+      if (map3dIsReady) enableMaplibreFeatureClick();
+      else setTimeout(pollMaplibreReady, 200);
+    })();
+
+    // --------------------------
+    // Clean up on unload (helpful during development)
+    // --------------------------
+    window.addEventListener('unload', () => {
+      try { if (map3d) map3d.remove(); } catch(e) {}
+      try { if (map) map.remove(); } catch(e) {}
+    });
+
+  })();
+  </script>
+</body>
+</html>
