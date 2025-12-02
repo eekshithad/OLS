@@ -30,13 +30,14 @@
     <input type="checkbox" id="toggleJSON"> Load geojson
   </label>
   <div id="toggles">
-    <label class="toggle-label"><input type="checkbox" id="t_rect" checked> Rectangle</label>
-    <label class="toggle-label"><input type="checkbox" id="t_e1" checked> Contour 1</label>
-    <label class="toggle-label"><input type="checkbox" id="t_e2" checked> Contour 2</label>
+    <label class="toggle-label"><input type="checkbox" id="t_rect" checked> Runway</label>
     <label class="toggle-label"><input type="checkbox" id="t_app" checked> Approach </label>
     <label class="toggle-label"><input type="checkbox" id="t_take" checked> Takeoff </label>
-    <label><input type="checkbox" id="t_dc" checked> DC</label>
-    <label><input type="checkbox" id="t_ab" checked> AB</label>
+    <label><input type="checkbox" id="t_dc" checked> Transitional 1</label>
+    <label><input type="checkbox" id="t_ab" checked> Transitional 2</label>
+    <label><input type="checkbox" id="t_conical" checked> Conical</label>
+    <label><input type="checkbox" id="t_ihs" checked> Inner Horizontal Surface</label>
+    <label><input type="checkbox" id="t_ohs" checked> Outer Horizontal Surface</label>
   </div>
 </div>
 <div id="map"></div>
@@ -68,17 +69,32 @@ function destPoint([lon, lat], bearingDeg, distanceM){
   const λ2 = λ1 + Math.atan2(Math.sin(θ)*Math.sin(δ)*Math.cos(φ1), Math.cos(δ)-Math.sin(φ1)*Math.sin(φ2));
   return [toDeg(λ2), toDeg(φ2)];
 }
-const A = [77.08500, 28.56760];
-const B = [77.12270, 28.55880];
-const C = [77.12260, 28.55800];
-const D = [77.08490, 28.56680];
+const A = [77.08600, 28.56720];
+const B = [77.12115, 28.55910];
+const C = [77.12100, 28.55870];
+const D = [77.08575, 28.56680];
+const centerA = midpoint(A, D);
+const centerB = midpoint(C, B);
+const runwayCenter = midpoint(centerA, centerB);
 const rectCoords = [A, B, C, D, A];
 const { A_ext, B_ext, C_ext, D_ext } = makeOuterRunwayRect(A, B, C, D);
 const outerRect = [A_ext, B_ext, C_ext, D_ext, A_ext];
-let ml = null;               // maplibre map instance
-let proc = null;             // result of processFeatures() (computed once)
-let buildingsData = null;    // geojson loaded
-let bldSourceAdded = false;  // tracks whether 'bld' source added
+const innerHorizRadius = 4000.0;
+const innerHorizHeight = 45.0;
+const conicalOuterRadius = 6000.0;
+const conicalHeight = 200.0;
+const conicalCapsule = buildConicalCapsule(
+  centerA, 
+  centerB, 
+  innerHorizRadius, 
+  conicalOuterRadius, 
+  innerHorizHeight, 
+  conicalHeight
+);
+let ml = null;            
+let proc = null;             
+let buildingsData = null;    
+let bldSourceAdded = false;  
 function offsetPoint(pt, bearingDeg, distM) {
   return destPoint(pt, bearingDeg, distM);
 }
@@ -117,87 +133,17 @@ function makeOuterRunwayRect(A, B, C, D, offsetAB_CD = 140, offsetBC_AD = 60) {
   );
   return { A_ext, B_ext, C_ext, D_ext };
 }
-function makeEllipseAroundExtendedRect({ A_ext, B_ext, C_ext, D_ext }, scale = 0.1, segments = 2) {
-
-  // Center of extended rectangle
-  const cx = (A_ext[0] + B_ext[0] + C_ext[0] + D_ext[0]) / 4;
-  const cy = (A_ext[1] + B_ext[1] + C_ext[1] + D_ext[1]) / 4;
-
-  // Major axis = AB length
-  const major = distance(A_ext, B_ext) * scale;
-
-  // Minor axis = BC length
-  const minor = distance(B_ext, C_ext) * scale;
-
-  const a = major / 2;  // semi-major
-  const b = minor / 2;  // semi-minor
-
-  // ellipse rotation = bearing of AB
-  const theta = toRad(bearing(A_ext, B_ext));
-
-  const coords = [];
-
-  for (let i = 0; i <= segments; i++) {
-    const t = (i / segments) * 2 * Math.PI;
-
-    // parametric ellipse
-    const x =
-      cx + a * Math.cos(t) * Math.cos(theta) -
-      b * Math.sin(t) * Math.sin(theta);
-
-    const y =
-      cy + a * Math.cos(t) * Math.sin(theta) +
-      b * Math.sin(t) * Math.cos(theta);
-
-    coords.push([x, y]);
-  }
-
-  return {
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [coords] },
-    properties: {
-      name: "ellipse",
-      _base: 0,
-      _height: 0,
-      _color: "BLACK"
-    }
-  };
+function metersToLatLonOffset(dx, dy, lat) {
+  const dLat = dy / 111320; // meters per degree latitude
+  const dLon = dx / (111320 * Math.cos(lat * Math.PI / 180)); // meters per degree longitude
+  return [dLon, dLat];
 }
-const extRect = makeOuterRunwayRect(A, B, C, D);
-const ellipseFeature = makeEllipseAroundExtendedRect(extRect);
-
 function correctNormal(outward, centroid, midpoint) {
   const dirToCenter = bearing(midpoint, centroid);
   const diff = Math.abs(((outward - dirToCenter + 540) % 360) - 180);
   return diff > 90 ? outward : (outward + 180) % 360;
 }
-function makeCapsuleCoords(centerA, centerB, radius = 200, semicircleSamples = 64){
-  const mainBr = bearing(centerA, centerB);
-  const leftBr = (mainBr - 90 + 360) % 360;
-  const rightBr = (mainBr + 90) % 360;
-  const coords = [];
-  const A_left = destPoint(centerA, leftBr, radius);
-  const A_right = destPoint(centerA, rightBr, radius);
-  const B_left = destPoint(centerB, leftBr, radius);
-  const B_right = destPoint(centerB, rightBr, radius);
-  coords.push(A_left);
-  coords.push(B_left);
-  for (let i = 0; i <= semicircleSamples; i++){
-    const frac = i / semicircleSamples;
-    const ang = (mainBr - 90) + frac * 180;
-    coords.push(destPoint(centerB, ang, radius));
-  }
-  coords.push(B_right);
-  coords.push(A_right);
-  for (let i = 0; i <= semicircleSamples; i++){
-    const frac = i / semicircleSamples;
-    const ang = (mainBr + 90) + frac * 180;
-    coords.push(destPoint(centerA, ang, radius));
-  }
-  coords.push(coords[0]);
-  return coords;
-}
-const defaults = { bandCount: 360, wedgeLength: 3700, angleWidthDeg: 3 };
+const defaults = { bandCount: 360, wedgeLength: 15700, angleWidthDeg: 3 };
 function expandSideEndpoints(side) {
   const sb = bearing(side.a, side.b);
   const expandedA = destPoint(side.a, sb + 180, 5);
@@ -291,106 +237,146 @@ function generateWedgeBands(exp, slopeDeg, color, centroid) {
     });
   }
   return bands;
-}function processFeatures() {
-
-  // --- existing -------------------------------------------
-  const approachSide = { a: A_ext, b: D_ext }; // AD
-  const takeoffSide  = { a: B_ext, b: C_ext }; // BC
-
+}
+function buildConicalCapsule(centerA, centerB) {
+  const bands = [];
+  const segments = 96;
+  const nRings = 50;
+  const radialStep = (conicalOuterRadius - innerHorizRadius) / nRings;
+  const heightStep = conicalHeight / (conicalOuterRadius - innerHorizRadius);
+  for (let ring = 0; ring < nRings; ring++) {
+    const r0 = innerHorizRadius + ring * radialStep;
+    const r1 = innerHorizRadius + (ring + 1) * radialStep;
+    const h0 = innerHorizHeight + (r0 - innerHorizRadius) * heightStep;
+    const h1 = innerHorizHeight + (r1 - innerHorizRadius) * heightStep;
+    const ring0 = makeCapsuleRing(centerA, centerB, r0, segments);
+    const ring1 = makeCapsuleRing(centerA, centerB, r1, segments);
+    for (let i = 0; i < ring0.length; i++) {
+      const next = (i + 1) % ring0.length;
+      const p1 = ring0[i];
+      const p2 = ring0[next];
+      const p3 = ring1[next];
+      const p4 = ring1[i];
+      bands.push({
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [[p1, p2, p3, p4, p1]]
+        },
+        properties: {
+          _base: h0,
+          _height: h1,
+          _color: "#ff9900"
+        }
+      });
+    }
+  }
+  return bands;
+}
+function makeCapsuleRing(centerA, centerB, radius, segments = 96) {
+  const pts = [];
+  const br = bearing(centerA, centerB);
+  const br180 = br + 180;
+  for (let i = 0; i <= segments / 2; i++) {
+    const ang = br + 90 - (i * 180) / (segments / 2);
+    pts.push(destPoint(centerB, ang, radius));
+  }
+  for (let i = 0; i <= segments / 2; i++) {
+    const ang = br180 + 90 - (i * 180) / (segments / 2);
+    pts.push(destPoint(centerA, ang, radius));
+  }
+  return pts;
+}function makeCircle(center, radiusM, segments = 180) {
+  const pts = [];
+  for (let i = 0; i <= segments; i++) {
+    const ang = (i / segments) * 360;   // 0 → 360°
+    pts.push(destPoint(center, ang, radiusM));
+  }
+  return pts;
+}
+const circle15000 = makeCircle(runwayCenter, 15000);
+function buildIHS(centerA, centerB) {
+  const pts = makeCapsuleRing(centerA, centerB, innerHorizRadius, 180);
+  
+  return [{
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [pts] },
+    properties: {
+      _base: innerHorizHeight,
+      _height: innerHorizHeight,
+      _color: "#87CEEB"   
+    }
+  }];
+}
+function buildOHS_Donut(centerA, centerB, runwayCenter) {
+  const outerRadius = 15000;  
+  const innerRadius = conicalOuterRadius;
+  const outerRing = makeCircle(runwayCenter, outerRadius, 360);
+  let innerRing = makeCapsuleRing(centerA, centerB, innerRadius, 180);
+  innerRing = innerRing.reverse();
+  return [{
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        outerRing,
+        innerRing 
+      ]
+    },
+    properties: {
+      _base: innerHorizHeight + conicalHeight, 
+      _height: innerHorizHeight + conicalHeight,
+      _color: "#ADD8E6" 
+    }
+  }];
+}
+function processFeatures() {
+  const approachSide = { a: A_ext, b: D_ext };
+  const takeoffSide  = { a: B_ext, b: C_ext };
   const centerA = midpoint(A, D);
   const centerB = midpoint(C, B);
-
   const radius1 = 600;
   const radius2 = 700;
   const semicircleSamples = 64;
-
-  const c1Coords = makeCapsuleCoords(centerA, centerB, radius1, semicircleSamples);
-  const c2Coords = makeCapsuleCoords(centerA, centerB, radius2, semicircleSamples);
-
   const sideDC = { a: D_ext, b: C_ext }; 
   const sideAB = { a: A_ext, b: B_ext }; 
-
   const expDC = expandSideEndpoints(sideDC);
   const expAB = expandSideEndpoints(sideAB);
-
-  const capsule1Feature = {
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [ c1Coords ] },
-    properties: { _base: 0, _height: 10, _color: "#FFB6C1" }
-  };
-
-  const capsule2Feature = {
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [ c2Coords ] },
-    properties: { _base: 10, _height: 20, _color: "#F4C2C2" }
-  };
-
   const expApp  = expandSideEndpoints(approachSide);
   const expTake = expandSideEndpoints(takeoffSide);
-
   const centroidRect = (pts => { 
     let sx=0, sy=0; 
     for (const p of pts){ sx+=p[0]; sy+=p[1]; } 
     return [sx/pts.length, sy/pts.length];
   })([A,B,C,D]);
-
-  const approachBands = generateWedgeBandsForExpanded(expApp, 2, "#ff6600", centroidRect);
-  const takeoffBands  = generateWedgeBandsForExpanded(expTake, 2, "#ff6600", centroidRect);
-  const dcBands       = generateWedgeBands(expDC, 2, "#00ccff", centroidRect);
-  const abBands       = generateWedgeBands(expAB, 2, "#00ccff", centroidRect);
-
+  const approachBands = generateWedgeBandsForExpanded(expApp, 3, "#ff6600", centroidRect);
+  const takeoffBands  = generateWedgeBandsForExpanded(expTake, 3, "#ff6600", centroidRect);
+  const dcBands       = generateWedgeBands(expDC, 22, "#00ccff", centroidRect);
+  const abBands       = generateWedgeBands(expAB, 22, "#00ccff", centroidRect);
   const expandedLineApp = {
     type: "Feature",
     geometry: { type: "LineString", coordinates: [ expApp.expandedA, expApp.expandedB ] },
     properties: {}
   };
-
   const expandedLineTake = {
     type: "Feature",
     geometry: { type: "LineString", coordinates: [ expTake.expandedA, expTake.expandedB ] },
     properties: {}
   };
-
-  // ----------------------------------------------------------
-  // 🟦 NEW PART — Create ellipse from EXTENDED RECTANGLE
-  // ----------------------------------------------------------
-
-  const extRect = makeOuterRunwayRect(A, B, C, D);
-
-  const ellipseFeature = makeEllipseAroundExtendedRect(extRect);
-
-  const ellipseFC = {
-    type: "FeatureCollection",
-    features: [ellipseFeature]
-  };
-
-  // ----------------------------------------------------------
-  // FINAL RETURN
-  // ----------------------------------------------------------
-
+const extRect = makeOuterRunwayRect(A, B, C, D);
   return {
-    capsule1Feature,
-    capsule2Feature,
-
-    c1Coords,
-    c2Coords,
-
     expApp,
     expTake,
-
     approachBandsFC: { type: "FeatureCollection", features: approachBands },
     takeoffBandsFC:  { type: "FeatureCollection", features: takeoffBands },
     dcBandsFC:        { type: "FeatureCollection", features: dcBands },
     abBandsFC:        { type: "FeatureCollection", features: abBands },
-
     expandedLineApp,
     expandedLineTake,
-
-    // NEW
-    ellipseFC
   };
 }
-
+let rotating = false;
+let rotationSpeed = 0.1;
 ml = new maplibregl.Map({
   container: "map",
   style: {
@@ -398,19 +384,35 @@ ml = new maplibregl.Map({
     sources: {
       esri: {
         type: "raster",
-        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ],
         tileSize: 256
       }
     },
-    layers: [{ id:"esri", type:"raster", source:"esri" }]
+    layers: [
+      { id:"esri", type:"raster", source:"esri" }
+    ]
   },
   center: [77.104, 28.562],
   zoom: 15,
   minZoom: 9,
   maxZoom: 18,
   pitch: 55,
-  bearing: -20,
-  interactive: true
+  bearing: 0,
+  interactive: true,
+  dragRotate: true,
+  touchZoomRotate: true,
+  renderWorldCopies: true
+});
+function rotateMap() {
+  if (!rotating) return;
+  ml.setBearing(ml.getBearing() + rotationSpeed);
+  requestAnimationFrame(rotateMap);
+} 
+ml.getContainer().addEventListener('click', () => {
+  rotating = !rotating;
+  if (rotating) rotateMap();
 });
 ml.on("load", () => {
   proc = processFeatures();
@@ -486,26 +488,75 @@ ml.addLayer({
       "fill-extrusion-opacity": 0.65
     }
 });
-ml.addSource("ellipseSource", {
+ml.addSource("conical-src", {
   type: "geojson",
-  data: proc.ellipseFC
+  data: { type: "FeatureCollection", features: conicalCapsule }
 });
-
 ml.addLayer({
-  id: "ellipseLayer",
+  id: "conical-3d",
   type: "fill-extrusion",
-  source: "ellipseSource",
+  source: "conical-src",
   paint: {
-    "fill-extrusion-color": "#88ccff",
-    "fill-extrusion-height": 0,
-    "fill-extrusion-opacity": 0.6
+    "fill-extrusion-height": ["get","_height"],
+    "fill-extrusion-base": ["get","_base"],
+    "fill-extrusion-color": ["get","_color"],
+    "fill-extrusion-opacity": 1.0
   }
 });
-
-  ml.addSource("capsule1-src", { type: "geojson", data: { type: "FeatureCollection", features: [proc.capsule1Feature] } });
-  ml.addLayer({ id: "capsule1-3d", type: "fill-extrusion", source: "capsule1-src", paint: { "fill-extrusion-height":["get","_height"], "fill-extrusion-base":["get","_base"], "fill-extrusion-color":["get","_color"], "fill-extrusion-opacity":0.85 } });
-  ml.addSource("capsule2-src", { type: "geojson", data: { type: "FeatureCollection", features: [proc.capsule2Feature] } });
-  ml.addLayer({ id: "capsule2-3d", type: "fill-extrusion", source: "capsule2-src", paint: { "fill-extrusion-height":["get","_height"], "fill-extrusion-base":["get","_base"], "fill-extrusion-color":["get","_color"], "fill-extrusion-opacity":0.85 } });
+ml.addSource("circle15k-src", {
+  type: "geojson",
+  data: {
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [circle15000] },
+      properties: { _height: 1, _base: 0, _color: "#ff00ff" }
+    }]
+  }
+});
+ml.addLayer({
+  id: "circle15k-3d",
+  type: "fill-extrusion",
+  source: "circle15k-src",
+  paint: {
+    "fill-extrusion-height": 1,
+    "fill-extrusion-base": 0,
+    "fill-extrusion-color": "#ff00ff",
+    "fill-extrusion-opacity": 0.3
+  }
+});
+const ihs = buildIHS(centerA, centerB);
+ml.addSource("ihs-src", {
+  type: "geojson",
+  data: { type: "FeatureCollection", features: ihs }
+});
+ml.addLayer({
+  id: "ihs-3d",
+  type: "fill-extrusion",
+  source: "ihs-src",
+  paint: {
+    "fill-extrusion-height": ["get","_height"],
+    "fill-extrusion-base": ["get","_base"],
+    "fill-extrusion-color": ["get","_color"],
+    "fill-extrusion-opacity": 0.5
+  }
+});
+const ohs = buildOHS_Donut(centerA, centerB, runwayCenter);
+ml.addSource("ohs-src", {
+  type: "geojson",
+  data: { type: "FeatureCollection", features: ohs }
+});
+ml.addLayer({
+  id: "ohs-3d",
+  type: "fill-extrusion",
+  source: "ohs-src",
+  paint: {
+    "fill-extrusion-height": ["get","_height"],
+    "fill-extrusion-base": ["get","_base"],
+    "fill-extrusion-color": ["get","_color"],
+    "fill-extrusion-opacity": 0.4
+  }
+});
   ml.addSource("approach-src", { type: "geojson", data: proc.approachBandsFC });
   ml.addLayer({ id: "approach-3d", type: "fill-extrusion", source: "approach-src", paint: { "fill-extrusion-height":["get","_height"], "fill-extrusion-base":["get","_base"], "fill-extrusion-color":["get","_color"], "fill-extrusion-opacity":0.65 } });
   ml.addSource("takeoff-src", { type: "geojson", data: proc.takeoffBandsFC });
@@ -514,12 +565,14 @@ ml.addLayer({
   ml.addLayer({ id: "expanded-lines", type: "line", source: "expanded-lines-src", paint: { "line-color": "#000000", "line-width": 2 } });
   const mapping = [
     { checkboxId: "t_rect", layerIds: ["rect-3d"] },
-    { checkboxId: "t_e1",   layerIds: ["capsule1-3d"] },
-    { checkboxId: "t_e2",   layerIds: ["capsule2-3d"] },
     { checkboxId: "t_app",  layerIds: ["approach-3d", "expanded-lines"] },
     { checkboxId: "t_dc", layerIds: ["dc-3d"] },
     { checkboxId: "t_ab", layerIds: ["ab-3d"] },
-    { checkboxId: "t_take", layerIds: ["takeoff-3d",  "expanded-lines"] }
+    { checkboxId: "t_take", layerIds: ["takeoff-3d",  "expanded-lines"] },
+    { checkboxId: "t_conical", layerIds: ["conical-3d"] },
+    { checkboxId: "t_circle15k", layerIds: ["circle15k-3d"] },
+    { checkboxId: "t_ihs", layerIds: ["ihs-3d"] },
+    { checkboxId: "t_ohs", layerIds: ["ohs-3d"] },
   ];
   mapping.forEach(m => {
     const cb = document.getElementById(m.checkboxId);
@@ -588,15 +641,11 @@ async function renderBuildings() {
   const features = [];
   const approachRings = polygonFromBands(approachBands);
   const takeoffRings  = polygonFromBands(takeoffBands);
-  const c1ring = proc.capsule1Feature.geometry.coordinates[0];
-  const c2ring = proc.capsule2Feature.geometry.coordinates[0];
   buildingsData.features.forEach(f => {
     const meanH = Number(f.properties?.mean_h) || 0;
     const ctr = featureCentroid(f);
     const thresholds = [];
     if (pointInPoly(ctr, rectPoly)) thresholds.push(1);
-    if (pointInPoly(ctr, c1ring)) thresholds.push(10);
-    if (pointInPoly(ctr, c2ring)) thresholds.push(20);
     for (const ring of approachRings) {
       if (pointInPoly(ctr, ring)) {
         const d = distancePointToLine(ctr, approachLine);
@@ -684,7 +733,7 @@ toggleJSON.addEventListener("change", async () => {
     if (ml.getLayer("bld-3d")) ml.setLayoutProperty("bld-3d", "visibility", "none");
   }
 });
-["t_rect","t_e1","t_e2","t_app","t_take"].forEach(id => {
+["t_rect","t_app","t_take"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener("change", () => {
