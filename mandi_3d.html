@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Mandi OLS – TRUE Capsule Connector (45m → 95m)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+<style>
+html, body { margin:0; height:100%; }
+#map { width:100%; height:100%; }
+.viewToggle {  position: absolute;  bottom: 20px;  left: 20px;  display: flex;  width: 120px;  height: 44px; border-radius: 8px;  overflow: hidden;  box-shadow: 0 4px 10px rgba(0,0,0,0.3);  z-index: 3000;}
+.viewToggle button {  flex: 1;  border: none;  font-weight: bold;  font-size: 15px;  cursor: pointer;  transition: all 0.25s ease;}
+.viewToggle .active {  background: #b3d4ff;   color: #000;}
+.viewToggle .inactive {  background: #040766;   color: #fff;}
+.viewToggle button:hover {  filter: brightness(1.1);}
+</style>
+</head>
+<body>
+<div class="viewToggle">
+  <button id="btn2D" onclick="go2D()">2D</button>
+  <button id="btn3D" onclick="go3D()">3D</button>
+</div>
+<div id="map"></div>
+<script>
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  center: [76.935, 31.596],
+  zoom: 13,
+  pitch: 65,
+  bearing: -30,
+  antialias: true
+});
+map.addControl(new maplibregl.NavigationControl());
+/* ================= ROTATION CONTROL ================= */
+let rotating = false;
+let rotationFrame = null;
+const rotationSpeed = 0.05; // degrees per frame (slow & smooth)
+const VERTICAL_EXAGGERATION = 2.5; // try 2 → 5
+
+function rotateMap() {
+  if (!rotating) return;
+
+  const bearing = map.getBearing();
+  map.setBearing(bearing + rotationSpeed);
+  rotationFrame = requestAnimationFrame(rotateMap);
+}
+// Toggle rotation on map click
+map.on('click', () => {
+  rotating = !rotating;
+  if (rotating) {
+    rotateMap();
+  } else {
+    cancelAnimationFrame(rotationFrame);
+    rotationFrame = null;
+  }
+});
+
+/* ================= CAPSULE PARAMS ================= */
+const innerHorizHeight = 45;
+const outerHeight = 95;
+const conicalHeight = outerHeight - innerHorizHeight;
+let innerHorizRadius = 0;
+let outerRadius = 0;
+const REF_ELEV = 784.5;
+
+/* ================= HELPERS ================= */
+const bearing = (a,b)=>turf.bearing(turf.point(a),turf.point(b));
+const destPoint = (c,b,d)=>turf.destination(c,d/1000,b).geometry.coordinates;
+const dist = (a,b)=>turf.distance(a,b,{units:'meters'});
+const toRad = d=>d*Math.PI/180;
+const midpoint = (a,b)=>[(a[0]+b[0])/2,(a[1]+b[1])/2];
+
+function outwardNormalBearingForExpanded(exp, centroid){
+  const mid = midpoint(exp.expandedA, exp.expandedB);
+  const toCentroid = bearing(mid, centroid);
+  const n1 = exp.sideBearing - 90;
+  const n2 = exp.sideBearing + 90;
+  return Math.abs(((n1-toCentroid+540)%360)) <
+         Math.abs(((n2-toCentroid+540)%360)-180) ? n1 : n2;
+}
+
+/* ================= CAPSULE ================= */
+function makeCapsuleRing(a,b,r,s=96){
+  const pts=[], br=bearing(a,b), br180=br+180;
+  for(let i=0;i<=s/2;i++) pts.push(destPoint(b, br+90-(i*180)/(s/2), r));
+  for(let i=0;i<=s/2;i++) pts.push(destPoint(a, br180+90-(i*180)/(s/2), r));
+  return pts;
+}
+
+function buildConicalCapsule(a,b){
+  const feats=[], rings=50;
+  const inwardFactor = 0.9;
+  const adjustedInner = innerHorizRadius * inwardFactor;
+  const dr = (outerRadius - adjustedInner) / rings;
+  const dh = conicalHeight / (outerRadius - adjustedInner);
+
+  for(let r=0;r<rings;r++){
+    const r0 = adjustedInner + r*dr;
+    const r1 = r0 + dr;
+    const h0 = innerHorizHeight + (r0 - adjustedInner) * dh;
+    const h1 = innerHorizHeight + (r1 - adjustedInner) * dh;
+    const g0 = makeCapsuleRing(a,b,r0);
+    const g1 = makeCapsuleRing(a,b,r1);
+
+    for(let i=0;i<g0.length;i++){
+      const n=(i+1)%g0.length;
+      feats.push({
+        type:"Feature",
+        properties:{ base:h0, height:h1 },
+        geometry:{ type:"Polygon", coordinates:[[g0[i],g0[n],g1[n],g1[i],g0[i]]] }
+      });
+    }
+  }
+  return feats;
+}
+
+/* ================= WEDGE FUNCTIONS ================= */
+function generateWedgeBandsForExpanded(exp, slopeDeg, color, centroid){
+  const bands=[];
+  const outward = outwardNormalBearingForExpanded(exp, centroid);
+  const nSeg = 8;
+  const segLen = 120;
+  const angleWidthRad = toRad(85);
+
+  for(let i=0;i<nSeg;i++){
+    const d0=i*segLen, d1=(i+1)*segLen;
+    const A0=destPoint(exp.expandedA,outward,d0);
+    const B0=destPoint(exp.expandedB,outward,d0);
+    const A1=destPoint(exp.expandedA,outward,d1);
+    const B1=destPoint(exp.expandedB,outward,d1);
+    const e0=d0*Math.tan(angleWidthRad);
+    const e1=d1*Math.tan(angleWidthRad);
+
+    const l0=destPoint(A0,exp.sideBearing+180,e0);
+    const r0=destPoint(B0,exp.sideBearing,e0);
+    const l1=destPoint(A1,exp.sideBearing+180,e1);
+    const r1=destPoint(B1,exp.sideBearing,e1);
+
+    const h=Math.tan(toRad(slopeDeg))*d1;
+    bands.push({
+      type:"Feature",
+      geometry:{type:"Polygon",coordinates:[[l0,r0,r1,l1,l0]]},
+      properties:{_base:0,_height:h,_color:color}
+    });
+  }
+  return bands;
+}
+
+function generateWedgeBands(exp, slopeDeg, color, centroid){
+  const bands=[];
+  const centerStart=midpoint(exp.expandedA,exp.expandedB);
+  const outward=outwardNormalBearingForExpanded(exp,centroid);
+  const nSeg=90;
+  const segLen=166;
+  const halfBase=110;
+
+  for(let i=0;i<nSeg;i++){
+    const d0=i*segLen, d1=(i+1)*segLen;
+    const c0=destPoint(centerStart,outward,d0);
+    const c1=destPoint(centerStart,outward,d1);
+    const w0 = halfBase + Math.pow(d0,0.91)*0.35;
+    const w1 = halfBase + Math.pow(d1,0.91)*0.35;
+
+    const l0=destPoint(c0,exp.sideBearing+180,w0);
+    const r0=destPoint(c0,exp.sideBearing,w0);
+    const l1=destPoint(c1,exp.sideBearing+180,w1);
+    const r1=destPoint(c1,exp.sideBearing,w1);
+
+    const h=Math.tan(toRad(slopeDeg))*d1;
+    bands.push({
+      type:"Feature",
+      geometry:{type:"Polygon",coordinates:[[l0,r0,r1,l1,l0]]},
+      properties:{_base:0,_height:h,_color:color}
+    });
+  }
+  return bands;
+}
+
+/* ================= LOAD ================= */
+map.on('load', async ()=>{
+  const buffer = await fetch('BUFFER_HEIGHT.geojson').then(r=>r.json());
+  const obs = await fetch('OBS1_updated.geojson').then(r=>r.json());
+
+  /* ===== OLS ===== */
+  map.addSource('ols',{type:'geojson',data:buffer});
+  map.addLayer({
+    id:'ols-3d',
+    type:'fill-extrusion',
+    source:'ols',
+    paint:{
+      'fill-extrusion-color':['match',['get','LAYER'],
+        'OLS1','#ff8a65','OLS2','#ce93d8','TAKE_OFF1','#81c784','TAKE_OFF2','#64b5f6','#999'],
+      'fill-extrusion-height':['to-number',['get','HEIGTH']],
+      'fill-extrusion-opacity':0.6
+    }
+  });
+
+  /* ===== WEDGES (FIXED) ===== */
+  const A=[76.92809,31.58309];
+  const B=[76.94438,31.60906];
+  const C=[76.94179,31.61025];
+  const D=[76.92545,31.58429];
+
+  const centroid=turf.centroid(turf.polygon([[A,B,C,D,A]])).geometry.coordinates;
+
+  const wedgeFeatures=[
+    ...generateWedgeBandsForExpanded({expandedA:A,expandedB:B,sideBearing:bearing(A,B)},7,'#ff5252',centroid),
+    ...generateWedgeBandsForExpanded({expandedA:C,expandedB:D,sideBearing:bearing(C,D)},7,'#ff5252',centroid),
+    ...generateWedgeBands({expandedA:D,expandedB:A,sideBearing:bearing(D,A)},7,'#40c4ff',centroid),
+    ...generateWedgeBands({expandedA:B,expandedB:C,sideBearing:bearing(B,C)},7,'#40c4ff',centroid)
+  ];
+
+  map.addSource('wedge-bands',{type:'geojson',data:{type:'FeatureCollection',features:wedgeFeatures}});
+  map.addLayer({
+    id:'wedge-bands-3d',
+    type:'fill-extrusion',
+    source:'wedge-bands',
+    paint:{
+      'fill-extrusion-color':['get','_color'],
+      'fill-extrusion-height':['get','_height'],
+      'fill-extrusion-base':0,
+      'fill-extrusion-opacity':0.85
+    }
+  });
+
+  /* ===== CAPSULE ===== */
+  const cA=[76.92677,31.58367], cB=[76.94308,31.60965];
+  innerHorizRadius=dist(cA,turf.nearestPointOnLine(turf.polygonToLine(buffer.features.find(f=>f.properties.LAYER==='OLS1')),turf.point(cA)).geometry.coordinates)*0.85;
+  outerRadius=dist(cB,turf.nearestPointOnLine(turf.polygonToLine(buffer.features.find(f=>f.properties.LAYER==='OLS2')),turf.point(cB)).geometry.coordinates)*1.00;
+
+  map.addSource('ols-capsule',{type:'geojson',data:{type:'FeatureCollection',features:buildConicalCapsule(cA,cB)}});
+  map.addLayer({
+    id:'ols-capsule-3d',
+    type:'fill-extrusion',
+    source:'ols-capsule',
+    paint:{
+      'fill-extrusion-color':'#f9a825',
+      'fill-extrusion-height':['get','height'],
+      'fill-extrusion-base':['get','base'],
+      'fill-extrusion-opacity':0.95
+    }
+  });
+
+  const obsExtruded = obs.features.map(f => {
+    const type = (f.properties.OBJECT || 'OTHERS').toUpperCase();
+
+    const topElev = Number(f.properties.TOP_ELEV);
+    if (isNaN(topElev)) return null;
+
+    const extrudeHeight = Math.max(0, topElev - REF_ELEV);
+
+    let sides = 4, rotation = 0;
+    if (type.includes('TREE')) sides = 6;
+    else if (type.includes('HILL')) sides = 3;
+    else if (type.includes('CELL')) sides = 32;
+    else rotation = 45;
+
+    const poly = turf.circle(
+      f.geometry.coordinates,
+      0.008,
+      { steps: sides, units: 'kilometers', rotation }
+    );
+
+    return {
+      type: "Feature",
+      properties: {
+        ...f.properties,
+        base: REF_ELEV,
+        height: topElev
+      },
+      geometry: poly.geometry
+    };
+  }).filter(Boolean);
+
+  map.addSource('obs-3d',{
+    type:'geojson',
+    data:{type:'FeatureCollection',features:obsExtruded}
+  });
+
+  map.addLayer({
+    id:'obs-3d-extrude',
+    type:'fill-extrusion',
+    source:'obs-3d',
+    paint:{
+      'fill-extrusion-color':'#00e5ff',
+      'fill-extrusion-height':['get','height'],
+      'fill-extrusion-base':0,
+      'fill-extrusion-opacity':0.95
+    }
+  });
+  /* ===== OBS POPUP ===== */
+  map.on('click','obs-3d-extrude', e=>{
+    const p=e.features[0].properties||{};
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(`
+        <b>Object:</b> ${p.OBJECT||'-'}<br>
+        <b>Remark:</b> ${p.REMARK||'-'}<br>
+        <b>Runway:</b> ${p.RWY_No||'-'}<br>
+        <b>OBS Fun:</b> ${p.OBS_Fun||'-'}<br>
+        <b>OBS IHS:</b> ${p.OBS_IHS||'-'}
+      `)
+      .addTo(map);
+  });
+  map.on('mouseenter','obs-3d-extrude',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','obs-3d-extrude',()=>map.getCanvas().style.cursor='');
+  map.fitBounds(turf.bbox(buffer),{padding:80});
+});
+function go2D() {  window.location.href = 'mandi.html';}
+function go3D() {}
+document.getElementById('btn2D').className = 'inactive';
+document.getElementById('btn3D').className = 'active';
+</script>
+</body>
+</html>

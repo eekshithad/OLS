@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Mandi OLS – 2D Visualization</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+<style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:monospace}
+#navbar{position:fixed;top:0;left:0;right:0;height:52px;background:#040766;color:#fff;display:flex;align-items:center;padding:0 16px;z-index:2000}
+#nav-left{display:flex;gap:10px;align-items:center;font-size:30px}
+#nav-left img{height:32px}
+#nav-right{margin-left:auto}
+#nav-right img{width:34px;height:34px;border-radius:50%;border:2px solid #fff}
+#map{position:absolute;top:52px;bottom:0;width:100%}
+#controls{position:absolute;top:62px;left:10px;background:#000;color:#fff;padding:10px;border-radius:6px;z-index:1500;width:200px}
+select{width:100%;margin-top:6px}
+#otherLayersBtn{position:absolute;bottom:110px;right:20px;padding:8px 12px;background:#040766;color:#fff;border:none;border-radius:6px;cursor:pointer;z-index:2000}
+#tableIcon{position:absolute;bottom:20px;right:20px;width:44px;height:44px;background:#040766;color:#fff;font-size:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2000}
+.viewToggle {  position: absolute;  bottom: 20px;  left: 20px;  display: flex;  width: 120px;  height: 44px;  border-radius: 8px;  overflow: hidden;  box-shadow: 0 4px 10px rgba(0,0,0,0.3);  z-index: 3000;}
+.viewToggle button {  flex: 1;  border: none; font-weight: bold;  font-size: 15px;  cursor: pointer;  transition: all 0.25s ease;}
+.viewToggle .active {  background: #b3d4ff;   color: #000;}
+.viewToggle .inactive {  background: #040766;   color: #fff;}
+.viewToggle button:hover { filter: brightness(1.1);}
+#attrTable{  position:absolute;  display: none; top:100px;  left:150px;  width:80%;  height:75%;  background:#fff;  z-index:3000;  border-radius:8px;  box-shadow:0 4px 12px rgba(0,0,0,0.3);  overflow:hidden; flex-direction: column;}
+#attrTableHeader{  background:#040766;  color:#fff;  padding:6px;  text-align:right;  flex-shrink:0; }
+#attrTableBodyWrapper {  overflow: auto;  flex-grow: 1;}
+thead th {  position: sticky;  top: 0;  background: #041769;  color: #fff;  z-index: 10;}
+table{  width:100%;  border-collapse:collapse;}
+th, td{  border:1px solid #ccc;  padding:6px;  font-size:12px;  text-align:center;}
+#yearBar{  position:fixed;  bottom:18px;  left:50%;  transform:translateX(-50%);  display:flex;  gap:26px;  padding:12px 24px;  background:#fff;  border-radius:30px;  box-shadow:0 6px 18px rgba(0,0,0,0.3);  z-index:2600;}
+.yearItem{  display:flex;  flex-direction:column;  align-items:center;  cursor:pointer;}
+.yearDot{  width:16px;  height:16px;  border-radius:50%;  background:#1e88e5;}
+.yearItem.active .yearDot{  background:#2ecc71;}
+.yearLabel{  margin-top:6px;  font-size:11px;  color:#000;}
+#yearTriangle{  position:fixed;  bottom:58px;  left:50%;  transform:translateX(48px);   width:0;height:0;  border-left:8px solid transparent;  border-right:8px solid transparent;  border-top:10px solid #fff;  z-index:2600;}
+#yearPopup{  position:fixed;  bottom:95px;  left:50%;  transform:translateX(-50%);  background:#fff;  padding:16px 18px;  border-radius:10px;  box-shadow:0 6px 20px rgba(0,0,0,0.35);  display:none;  z-index:2700;  min-width:300px;}
+.popupClose{  position:absolute;  top:6px;  right:10px;  border:none;  background:none;  font-size:18px;  cursor:pointer;}
+.yearItem.disabled{  pointer-events:none;  opacity:0.35;}
+.yearItem.disabled .yearDot{  content: "🚫"; background:#9e9e9e;}
+#obsTable thead th {  position: sticky;  top: 0;  background: #041769;  color: #fff;  z-index: 20;  border: 1px solid #ccc;}
+#obsTable thead tr:nth-child(2) th {top: 28px;}
+</style>
+</head>
+
+<body>
+
+<div id="navbar">
+  <div id="nav-left">
+    <img src="GeoKnoLOGO_small.jpg"><strong>GEOKNO</strong>
+  </div>
+  <div id="nav-right"><img src="profile.png"></div>
+</div>
+
+<div id="controls">
+<label>Choose Airport</label>
+<select id="airportSelect">
+  <option value="mandi" selected>Mandi</option>
+  <option value="delhi">Delhi</option>
+</select>
+
+<label style="margin-top:8px;display:block">Basemap</label>
+<select id="basemapSelect">
+  <option value="osm">OSM</option>
+  <option value="esri">ESRI World</option>
+  <option value="topo">Topo</option>
+  <option value="terrain">Terrain</option>
+  <option value="satellite">Satellite</option>
+  <option value="dark">Dark</option>
+</select>
+</div>
+
+<button id="otherLayersBtn" title="AIRPORT LAYOUT">AIRPORT LAYOUT</button>
+<div id="tableIcon" title="OLS ATTRIBUTE">📊</div>
+<div class="viewToggle">
+  <button id="btn2D" onclick="go2D()">2D</button>
+  <button id="btn3D" onclick="go3D()">3D</button>
+</div>
+
+
+<div id="attrTable">
+  <div id="attrTableHeader">
+    <button onclick="attrTable.style.display='none'" style="color:#fff;background:none;border:none;font-size:18px;cursor:pointer;">✖</button>
+  </div>
+  <div id="attrTableBodyWrapper">
+    <table id="obsTable"></table>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<!-- YEAR BAR -->
+<div id="yearBar">
+  <div class="yearItem">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2020</span>
+  </div>
+  <div class="yearItem">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2021</span>
+  </div>
+  <div class="yearItem">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2022</span>
+  </div>
+  <div class="yearItem active">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2023</span>
+  </div>
+    <div class="yearItem">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2024</span>
+  </div>
+    <div class="yearItem">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2025</span>
+  </div>
+    <div class="yearItem disabled">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2026</span>
+  </div>
+    <div class="yearItem disabled">
+    <div class="yearDot"></div>
+    <span class="yearLabel">2027</span>
+  </div>
+</div>
+
+<div id="yearTriangle"></div>
+<div id="yearPopup"></div>
+
+<!-- START BUTTON -->
+<button id="startMeasureBtn"
+  style="position:absolute;bottom:70px;right:20px;
+  padding:8px 14px;background:#040766;color:#fff;
+  border:none;border-radius:6px;cursor:pointer;
+  z-index:2000" title="MEASURING TOOL">
+  MEASURE
+</button>
+
+<!-- MEASURE PANEL -->
+<div id="measurePanel"
+  style="display:none;position:absolute;bottom:130px;right:20px;
+  background:#000;color:#fff;padding:10px;border-radius:6px;
+  z-index:2000;width:170px">
+  <button id="stopMeasure"
+    style="width:100%;margin-bottom:6px">Stop Measurement</button>
+  <button id="clearMeasure"
+    style="width:100%">Clear Measurement</button>
+</div>
+
+<script>
+const INITIAL_LAYERS=['OLS1','OLS2','TAKE_OFF_1','TAKE_OFF_2','RWY CL'];
+
+const basemaps = {
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  osm: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  esri: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  topo: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+  dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+  terrain: 'https://tile.opentopomap.org/{z}/{x}/{y}.png'
+};
+
+const map = new maplibregl.Map({
+  container:'map',
+  style:{
+    version:8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources:{
+      basemap:{
+        type:'raster',
+        tiles:[basemaps.osm],
+        tileSize:256
+      }
+    },
+    layers:[{
+      id:'basemap',
+      type:'raster',
+      source:'basemap'
+    }]
+  },
+  center:[76.93,31.60],
+  zoom:10.5
+});
+map.addControl(new maplibregl.NavigationControl());
+
+basemapSelect.onchange=e=>{
+  map.getSource('basemap').setTiles([basemaps[e.target.value]]);
+};
+
+airportSelect.onchange=e=>{
+  if(e.target.value==='delhi') location.href='delhi.html';
+};
+
+let showAllBuffers=false, obsDataGlobal, selectedObsId=null;
+let allPopups = [];
+let livePopup = null;   // popup for current polygon only
+
+map.on('load',()=>{
+
+fetch('BUFFER_HEIGHT.geojson').then(r=>r.json()).then(d=>{
+  d.features.forEach((f,i)=>f.id=i);
+  map.addSource('buffer',{type:'geojson',data:d});
+  map.addLayer({
+    id:'buffer-fill',
+    type:'fill',
+    source:'buffer',
+    paint:{'fill-color':'#041769','fill-opacity':0.35},
+    filter:['in',['get','LAYER'],['literal',INITIAL_LAYERS]]
+  });
+});
+
+fetch('OBS1_updated.geojson').then(r=>r.json()).then(d=>{
+  d.features.forEach((f,i)=>f.id=i);
+  obsDataGlobal=d;
+  map.addSource('obs',{type:'geojson',data:d});
+map.addLayer({
+  id: 'obs',
+  type: 'circle',
+  source: 'obs',
+  paint: {
+    'circle-color': [
+      'case',
+      ['any',
+        ['==', ['get', 'OBS_Fun'], '-'],
+        ['==', ['get', 'OBS_Fun'], 0],
+        ['==', ['get', 'OBS_Fun'], '0'],
+        ['!', ['has', 'OBS_Fun']]
+      ],
+      '#ffeb3b',
+
+      [
+        'match',
+        ['get', 'obs_fun'],
+        'dark green', '#006400',
+        'green',      '#008000',
+        'dark blue',  '#00008b',
+        'blue',       '#0000ff',
+        'red',        '#ff0000',
+        '#ffeb3b'
+      ]
+    ],
+    'circle-radius': 3,
+    'circle-stroke-width': 2,
+    'circle-stroke-color':[
+  'case',
+  ['boolean',['feature-state','selected'],false],
+  '#000000','#ffffff'
+],
+  }
+});
+map.addLayer({
+  id: 'obs-labels',
+  type: 'symbol',
+  source: 'obs',
+  layout: {
+    'text-field': ['to-string', ['get', 'S_NO']],
+    'text-size': 10,
+    'text-offset': [0.8, 0],
+    'text-anchor': 'left',
+    'text-allow-overlap': true
+  },
+  paint: {
+    'text-color': '#000000',
+    'text-halo-color': '#ffffff',
+    'text-halo-width': 1
+  }
+});
+  map.on('click', e => {
+    if(selectedObsId !== null){
+      map.setFeatureState(
+        {source:'obs', id:selectedObsId},
+        {selected:false}
+      );
+      selectedObsId = null;
+    }
+  });
+  map.on('click','obs',e=>{
+    const p=e.features[0].properties;
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(`<b>Object:</b> ${p.OBJECT||'-'}<br><b>Remark:</b> ${p.REMARK||'-'}<b><br>Runway:</b> ${p.RWY_No || '-'}<br><b>OBS Fun:</b> ${p.OBS_Fun || '-'}<br><b>OBS IHS:</b> ${p.OBS_IHS || '-'}`)
+      .addTo(map);
+  });
+  
+/* SOURCE */
+map.addSource('measure', {
+  type: 'geojson',
+  data: { type: 'FeatureCollection', features: [] }
+});
+
+/* LINE LAYER */
+map.addLayer({
+  id: 'measure-lines',
+  type: 'line',
+  source: 'measure',
+  filter: ['==', '$type', 'LineString'],
+  paint: {
+    'line-color': '#ff0000',
+    'line-width': 2
+  }
+});
+
+/* POLYGON LAYER */
+map.addLayer({
+  id: 'measure-polygons',
+  type: 'fill',
+  source: 'measure',
+  filter: ['==', '$type', 'Polygon'],
+  paint: {
+    'fill-color': '#ff0000',
+    'fill-opacity': 0.25
+  }
+});
+});
+});
+
+otherLayersBtn.onclick=()=>{
+  showAllBuffers=!showAllBuffers;
+  map.setFilter('buffer-fill',showAllBuffers?null:['in',['get','LAYER'],['literal',INITIAL_LAYERS]]);
+};
+
+const attrTable = document.getElementById('attrTable');
+const obsTable = document.getElementById('obsTable');
+const tableIcon = document.getElementById('tableIcon');
+tableIcon.onclick = () => {
+  attrTable.style.display = 'flex';
+  const fieldsToShow = ['S_NO', 'OBJECT', 'EASTING', 'NORTHING', 'P_TOP_ELEV', 'OBS_Fun', 'IHS_ELEV', 'OBS_IHS', 'REMARK'];
+obsTable.innerHTML = `
+<thead>
+  <tr>
+    <th rowspan="2">GO</th>
+    <th rowspan="2">S.NO</th>
+    <th rowspan="2">OBJECT</th>
+    <th rowspan="2">EASTING</th>
+    <th rowspan="2">NORTHING</th>
+    <th colspan="3">DISTANCE (IN M.)</th>
+    <th colspan="2">FUNNEL / T.S</th>
+    <th colspan="2">IHS / C.S / OHS</th>
+    <th rowspan="2">REMARK</th>
+  </tr>
+  <tr>
+    <th>X</th>
+    <th>Y</th>
+    <th>YY</th>
+    <th>PERMISSIBLE TOP</th>
+    <th>OBSTACLE</th>
+    <th>PERMISSIBLE TOP</th>
+    <th>OBSTACLE</th>
+  </tr>
+</thead>
+<tbody>
+${obsDataGlobal.features.map(f => `
+  <tr>
+    <td>
+      <button onclick="goToObs(${f.id},${f.geometry.coordinates[0]},${f.geometry.coordinates[1]})">
+        CLICK
+      </button>
+    </td>
+    <td>${displayValue(f.properties?.S_NO)}</td>
+    <td>${displayValue(f.properties?.OBJECT)}</td>
+    <td>${displayValue(f.properties?.EASTING)}</td>
+    <td>${displayValue(f.properties?.NORTHING)}</td>
+    <td>${displayValue(f.properties?.X)}</td>
+    <td>${displayValue(f.properties?.Y)}</td>
+    <td>${displayValue(f.properties?.YY)}</td>
+
+    <td>${displayValue(f.properties?.P_TOP_ELEV)}</td>
+
+    <td>
+      ${obsCell(
+        f.properties?.OBS_Fun,
+        f.properties?.obs_fun
+      )}
+    </td>
+
+    <td>${displayValue(f.properties?.IHS_ELEV)}</td>
+
+    <td>
+      ${obsCell(
+        f.properties?.OBS_IHS,
+        f.properties?.obs_ihs
+      )}
+    </td>
+
+    <td>${displayValue(f.properties?.REMARK)}</td>
+  </tr>
+`).join('')}
+</tbody>`;
+
+};
+function goToObs(id,lon,lat){
+  if(selectedObsId!==null){
+    map.setFeatureState({source:'obs',id:selectedObsId},{selected:false});
+  }
+  selectedObsId=id;
+  map.setFeatureState({source:'obs',id},{selected:true});
+  map.flyTo({center:[lon,lat],zoom:17});
+  attrTable.style.display='none';
+}
+function startMeasuring() {
+  measuring = true;
+  currentPoints = [];
+  polygonId++;
+}
+function stopMeasuring() {
+  measuring = false;
+  currentPoints = [];
+
+  // finalize popup
+  if (livePopup) {
+    allPopups.push(livePopup);
+    livePopup = null;
+  }
+
+  polygonId++;
+  measuring = true; // auto-start next polygon
+}
+
+function clearMeasuring() {
+  measuring = false;
+  currentPoints = [];
+  allFeatures = [];
+  polygonId = 0;
+
+  if (livePopup) {
+    livePopup.remove();
+    livePopup = null;
+  }
+
+  allPopups.forEach(p => p.remove());
+  allPopups = [];
+
+  updateMeasureSource();
+}
+const yearPopup = document.getElementById('yearPopup');
+const yearBar = document.getElementById('yearBar');
+const yearTriangle = document.getElementById('yearTriangle');
+function closePopup(){
+  yearPopup.style.display='none';
+  yearBar.style.display='flex';
+  yearTriangle.style.display='block';
+}
+document.querySelectorAll('.yearItem').forEach(el=>{
+  el.onclick=()=>{
+    const year = el.querySelector('.yearLabel').textContent.trim();
+
+    if(year !== '2023'){
+      yearPopup.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button class="popupClose" onclick="closePopup()">✖</button>
+        <img src="ERROR.png" width="90" style="flex-shrink:0;">
+        <div style="display:flex;gap:12px;">
+          <div>
+            <b>Oops!</b><br>
+            No data available<br>
+            Please upload .geojson file
+          </div>
+        </div>
+        <input type="file" id="upload" accept=".geojson" style="display:none">
+        <button onclick="document.getElementById('upload').click()"
+          style="margin-top:10px;padding:6px 10px;background:#040766;color:#fff;border:none;border-radius:6px;">
+          Upload
+        </button>
+        </div>
+      `;
+      yearPopup.style.display='block';
+      yearBar.style.display='none';
+      yearTriangle.style.display='none';
+
+      document.getElementById('upload').onchange=()=>{
+        yearPopup.innerHTML = `
+          <button class="popupClose" onclick="closePopup()">✖</button>
+          <b>Good things comes to those who wait!</b><br><br>
+          Don't take the bait!!<br><br>
+          <b>We will reach out when your data is ready.</b>
+        `;
+      };
+
+    }else{
+      yearPopup.style.display='none';
+      yearBar.style.display='flex';
+      yearTriangle.style.display='block';
+    }
+  };
+});
+let measuring = false;
+let currentPoints = [];
+let allFeatures = [];
+let polygonId = 0;
+
+const startMeasureBtn = document.getElementById('startMeasureBtn');
+const measurePanel = document.getElementById('measurePanel');
+const stopMeasure = document.getElementById('stopMeasure');
+const clearMeasure = document.getElementById('clearMeasure');
+
+startMeasureBtn.onclick = () => {
+  measurePanel.style.display = 'block';
+  startMeasuring(); // auto start
+};
+stopMeasure.onclick = () => {
+  stopMeasuring();
+};
+clearMeasure.onclick = () => {
+  clearMeasuring();
+  measurePanel.style.display = 'none';
+  startMeasureBtn.style.display = 'block';
+};
+map.on('click', (e) => {
+  if (!measuring) return;
+  const pt = [e.lngLat.lng, e.lngLat.lat];
+  currentPoints.push(pt);
+  const count = currentPoints.length;
+  if (count >= 2) {
+    const line = turf.lineString([
+      currentPoints[count - 2],
+      currentPoints[count - 1]
+    ]);
+    allFeatures.push(line);
+    if (count === 2) {
+      const dist = turf.length(line, { units: 'kilometers' });
+      popup(e.lngLat, `Distance: <b>${dist.toFixed(2)} km</b>`);
+    }
+  }
+  if (count >= 3) {
+    const polyCoords = [...currentPoints, currentPoints[0]];
+    const polygon = turf.polygon([polyCoords]);
+    allFeatures = allFeatures.filter(
+      f => !(f.geometry.type === 'Polygon' && f.properties?.pid === polygonId)
+    );
+    polygon.properties = { pid: polygonId };
+    allFeatures.push(polygon);
+    const area = turf.area(polygon) / 1e6;
+    popup(e.lngLat, `Area: <b>${area.toFixed(2)} km²</b>`);
+  }
+  updateMeasureSource();
+});
+function updateMeasureSource() {
+  map.getSource('measure').setData({
+    type: 'FeatureCollection',
+    features: allFeatures
+  });
+}
+function popup(lngLat, html) {
+  if (livePopup) {
+    livePopup.remove();
+  }
+  livePopup = new maplibregl.Popup({ closeOnClick: false })
+    .setLngLat(lngLat)
+    .setHTML(html)
+    .addTo(map);
+}
+function displayValue(val) {
+  if (val === 0 || val === "0" || val === "-" || val === null || val === undefined || val === "") {
+    return "-";
+  }
+  return val;
+}
+function normalizeColor(c) {
+  if (!c) return "#000";
+
+  // remove spaces and lowercase
+  const cleaned = c.toLowerCase().replace(/\s+/g, '');
+
+  // known color aliases (optional safety)
+  const colorMap = {
+    darkgreen: '#006400',
+    green: '#009000',
+    darkblue: '#0000ff',
+    blue: '#6f47f9',
+    red: '#ff0000',
+    black: '#000000'
+  };
+
+  return colorMap[cleaned] || cleaned; // fallback if valid CSS
+}
+
+function obsCell(value, colorName) {
+  if (
+    value === "-" ||
+    value === 0 ||
+    value === "0" ||
+    value === null ||
+    value === undefined
+  ) {
+    return `<span style="color:#000">-</span>`;
+  }
+
+  const color = normalizeColor(colorName);
+
+  return `<span style="color:${color};font-weight:600">${value}</span>`;
+}
+function go2D() {
+  // already here → do nothing
+}
+function go3D() {
+  location.href = 'new_3d.html';
+}
+document.getElementById('btn2D').className = 'active';
+document.getElementById('btn3D').className = 'inactive';
+</script>
+</body>
+</html>
